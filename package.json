@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@expo-google-fonts/outfit": "^0.4.3",
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~57.0.22",
@@ -10,6 +11,7 @@
     "expo-font": "~57.0.4",
     "expo-linking": "~57.0.10",
     "expo-router": "~57.0.21",
+    "expo-splash-screen": "~57.0.8",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
