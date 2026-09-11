@@ -6,7 +6,7 @@
     "scheme": "openflight",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "plugins": ["expo-router", "expo-font", "expo-status-bar", "expo-splash-screen"],
     "experiments": {
       "typedRoutes": true

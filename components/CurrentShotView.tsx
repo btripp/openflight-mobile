@@ -1,6 +1,9 @@
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { AngleQuality, Shot } from '../types';
 import { MetricTile } from './MetricTile';
+import { fontFamily } from './theme/fonts';
+import { radius, spacing, type Palette } from './theme/tokens';
+import { useThemedStyles } from './theme/useTheme';
 
 const BALL_SPEED_GAUGE_MAX = 200; // mph, matches the web SpeedGauge range
 
@@ -20,6 +23,8 @@ function signed(value: number): string {
 }
 
 export function CurrentShotView({ shot }: { shot: Shot | null }) {
+  const styles = useThemedStyles(createStyles);
+
   if (!shot) {
     return (
       <View style={styles.empty}>
@@ -132,78 +137,84 @@ export function CurrentShotView({ shot }: { shot: Shot | null }) {
   );
 }
 
-const styles = StyleSheet.create({
-  scroll: {
-    flex: 1,
-  },
-  content: {
-    paddingBottom: 24,
-  },
-  empty: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 64,
-  },
-  emptyTitle: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#1a1a1a',
-  },
-  emptyHint: {
-    marginTop: 6,
-    fontSize: 14,
-    color: '#999',
-  },
-  hero: {
-    alignItems: 'center',
-    paddingVertical: 24,
-  },
-  heroLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#1a7f37',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  heroValueRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 6,
-    marginTop: 4,
-  },
-  heroValue: {
-    fontSize: 64,
-    fontWeight: '800',
-    color: '#1a1a1a',
-  },
-  heroUnit: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#666',
-  },
-  heroSublabel: {
-    fontSize: 13,
-    color: '#666',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  gaugeTrack: {
-    marginTop: 16,
-    width: '80%',
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#e5e9ee',
-    overflow: 'hidden',
-  },
-  gaugeFill: {
-    height: '100%',
-    borderRadius: 4,
-    backgroundColor: '#1a7f37',
-  },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-});
+const createStyles = (c: Palette) =>
+  StyleSheet.create({
+    scroll: {
+      flex: 1,
+    },
+    content: {
+      paddingBottom: spacing.xl,
+    },
+    empty: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 64,
+    },
+    emptyTitle: {
+      fontSize: 22,
+      fontFamily: fontFamily.bold,
+      color: c.text,
+      textTransform: 'uppercase',
+      letterSpacing: 2,
+    },
+    emptyHint: {
+      marginTop: 6,
+      fontSize: 14,
+      fontFamily: fontFamily.regular,
+      color: c.textMuted,
+    },
+    hero: {
+      alignItems: 'center',
+      paddingVertical: spacing.xl,
+    },
+    heroLabel: {
+      fontSize: 13,
+      fontFamily: fontFamily.semibold,
+      color: c.accentText,
+      textTransform: 'uppercase',
+      letterSpacing: 1.5,
+    },
+    heroValueRow: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      gap: 6,
+      marginTop: spacing.xs,
+    },
+    heroValue: {
+      fontSize: 64,
+      fontFamily: fontFamily.bold,
+      fontVariant: ['tabular-nums'],
+      color: c.text,
+    },
+    heroUnit: {
+      fontSize: 20,
+      fontFamily: fontFamily.medium,
+      color: c.textMuted,
+    },
+    heroSublabel: {
+      fontSize: 12,
+      fontFamily: fontFamily.semibold,
+      color: c.textMuted,
+      textTransform: 'uppercase',
+      letterSpacing: 1,
+    },
+    gaugeTrack: {
+      marginTop: spacing.lg,
+      width: '80%',
+      height: 8,
+      borderRadius: radius.pill,
+      backgroundColor: c.borderSoft,
+      overflow: 'hidden',
+    },
+    gaugeFill: {
+      height: '100%',
+      borderRadius: radius.pill,
+      backgroundColor: c.accentBlock,
+    },
+    grid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'space-between',
+    },
+  });

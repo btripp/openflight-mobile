@@ -77,6 +77,10 @@ describe.each<[string, Palette]>([
     expect(contrast(p.danger, p[ground])).toBeGreaterThanOrEqual(4.5);
   });
 
+  it.each(['bg', 'surface'] as const)('keeps accent-coloured text readable on %s', (ground) => {
+    expect(contrast(p.accentText, p[ground])).toBeGreaterThanOrEqual(4.5);
+  });
+
   it.each(['bg', 'surface'] as const)('keeps faint UI marks visible on %s', (ground) => {
     expect(contrast(p.textFaint, p[ground])).toBeGreaterThanOrEqual(3);
   });

@@ -1,23 +1,30 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { fontFamily } from '../../components/theme/fonts';
+import { useTheme } from '../../components/theme/useTheme';
 
 // Bottom tab bar. Live is the fully-featured Phase 0 screen; Shots, Stats, and
-// Device are placeholders that later roadmap phases fill in.
+// Device are placeholders that later roadmap phases fill in. The selected tab
+// switches to its filled icon, so it never relies on colour alone.
 export default function TabsLayout() {
+  const { colors } = useTheme();
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: '#1a7f37',
-        tabBarInactiveTintColor: '#999',
+        tabBarActiveTintColor: colors.accentText,
+        tabBarInactiveTintColor: colors.textMuted,
+        tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.borderSoft },
+        tabBarLabelStyle: { fontFamily: fontFamily.medium },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: 'Live',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="radio-outline" color={color} size={size} />
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons name={focused ? 'radio' : 'radio-outline'} color={color} size={size} />
           ),
         }}
       />
@@ -25,8 +32,8 @@ export default function TabsLayout() {
         name="shots"
         options={{
           title: 'Shots',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="list-outline" color={color} size={size} />
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons name={focused ? 'list' : 'list-outline'} color={color} size={size} />
           ),
         }}
       />
@@ -34,8 +41,12 @@ export default function TabsLayout() {
         name="stats"
         options={{
           title: 'Stats',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="stats-chart-outline" color={color} size={size} />
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? 'stats-chart' : 'stats-chart-outline'}
+              color={color}
+              size={size}
+            />
           ),
         }}
       />
@@ -43,8 +54,12 @@ export default function TabsLayout() {
         name="device"
         options={{
           title: 'Device',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="hardware-chip-outline" color={color} size={size} />
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? 'hardware-chip' : 'hardware-chip-outline'}
+              color={color}
+              size={size}
+            />
           ),
         }}
       />
