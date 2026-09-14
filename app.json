@@ -7,7 +7,22 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "plugins": ["expo-router", "expo-font", "expo-status-bar", "expo-splash-screen"],
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-status-bar",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-logo.png",
+          "imageWidth": 200,
+          "backgroundColor": "#f4f2ec",
+          "dark": {
+            "backgroundColor": "#0e0f10"
+          }
+        }
+      ]
+    ],
     "experiments": {
       "typedRoutes": true
     },
