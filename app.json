@@ -6,8 +6,23 @@
     "scheme": "openflight",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
-    "plugins": ["expo-router", "expo-font", "expo-status-bar"],
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-status-bar",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-logo.png",
+          "imageWidth": 200,
+          "backgroundColor": "#f4f2ec",
+          "dark": {
+            "backgroundColor": "#0e0f10"
+          }
+        }
+      ]
+    ],
     "experiments": {
       "typedRoutes": true
     },

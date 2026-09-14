@@ -1,5 +1,8 @@
 import { StyleSheet, Text, View } from 'react-native';
 import type { AngleQuality, SpinQuality } from '../types';
+import { fontFamily } from './theme/fonts';
+import { radius, spacing, type Palette } from './theme/tokens';
+import { useThemedStyles } from './theme/useTheme';
 
 type TileVariant = 'primary' | 'secondary' | 'spin';
 
@@ -24,6 +27,7 @@ export function MetricTile({
   variant = 'secondary',
   confidence,
 }: MetricTileProps) {
+  const styles = useThemedStyles(createStyles);
   const filled = confidence ? (FILLED_DOTS[confidence] ?? 0) : 0;
 
   return (
@@ -50,73 +54,79 @@ export function MetricTile({
   );
 }
 
-const styles = StyleSheet.create({
-  tile: {
-    width: '48%',
-    backgroundColor: '#f6f8fa',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#e5e9ee',
-  },
-  tilePrimary: {
-    backgroundColor: '#eaf6ee',
-    borderColor: '#bfe2cb',
-  },
-  valueRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 4,
-  },
-  value: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: '#1a1a1a',
-  },
-  valuePrimary: {
-    color: '#1a7f37',
-  },
-  unit: {
-    fontSize: 13,
-    color: '#666',
-    fontWeight: '600',
-  },
-  label: {
-    marginTop: 4,
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#666',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  subtext: {
-    marginTop: 2,
-    fontSize: 11,
-    color: '#999',
-  },
-  confidenceRow: {
-    marginTop: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  dots: {
-    flexDirection: 'row',
-    gap: 3,
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#d0d7de',
-  },
-  dotFilled: {
-    backgroundColor: '#1a7f37',
-  },
-  confidenceLabel: {
-    fontSize: 10,
-    color: '#999',
-    textTransform: 'uppercase',
-  },
-});
+const createStyles = (c: Palette) =>
+  StyleSheet.create({
+    tile: {
+      width: '48%',
+      backgroundColor: c.surface,
+      borderRadius: radius.card,
+      padding: 14,
+      marginBottom: spacing.md,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+    },
+    // The kiosk marks its promoted card with an accent rule on the leading edge.
+    tilePrimary: {
+      borderLeftWidth: 4,
+      borderLeftColor: c.accentBlock,
+    },
+    valueRow: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      gap: spacing.xs,
+    },
+    value: {
+      fontSize: 26,
+      fontFamily: fontFamily.bold,
+      fontVariant: ['tabular-nums'],
+      color: c.text,
+    },
+    valuePrimary: {
+      color: c.accentText,
+    },
+    unit: {
+      fontSize: 13,
+      fontFamily: fontFamily.medium,
+      color: c.textMuted,
+    },
+    label: {
+      marginTop: spacing.xs,
+      fontSize: 11,
+      fontFamily: fontFamily.semibold,
+      color: c.textMuted,
+      textTransform: 'uppercase',
+      letterSpacing: 1,
+    },
+    subtext: {
+      marginTop: 2,
+      fontSize: 11,
+      fontFamily: fontFamily.regular,
+      color: c.textMuted,
+    },
+    confidenceRow: {
+      marginTop: spacing.sm,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    dots: {
+      flexDirection: 'row',
+      gap: 3,
+    },
+    dot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: c.border,
+    },
+    dotFilled: {
+      backgroundColor: c.accentText,
+    },
+    confidenceLabel: {
+      fontSize: 10,
+      fontFamily: fontFamily.medium,
+      color: c.textMuted,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+  });

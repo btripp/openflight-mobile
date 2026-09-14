@@ -4,6 +4,9 @@ import { useSessionStore } from '../stores/useSessionStore';
 import { socketService } from '../services/socket';
 import { DEFAULT_SERVER_URL, loadServerUrl } from '../storage/connection';
 import type { ConnectionState } from '../types';
+import { fontFamily } from './theme/fonts';
+import { radius, spacing, type Palette } from './theme/tokens';
+import { useTheme, useThemedStyles } from './theme/useTheme';
 
 const STATUS_LABEL: Record<ConnectionState, string> = {
   disconnected: 'Disconnected',
@@ -12,11 +15,13 @@ const STATUS_LABEL: Record<ConnectionState, string> = {
   error: 'Connection failed',
 };
 
-const STATUS_COLOR: Record<ConnectionState, string> = {
-  disconnected: '#999',
-  connecting: '#b5820a',
-  connected: '#1a7f37',
-  error: '#c0392b',
+// Palette colour for each state's dot. The dot is decorative — the label beside
+// it carries the state — so it need not meet text contrast.
+const STATUS_COLOR: Record<ConnectionState, keyof Palette> = {
+  disconnected: 'textFaint',
+  connecting: 'warning',
+  connected: 'success',
+  error: 'error',
 };
 
 // Title bar + connection controls for the Live screen. Owns the server-URL text
@@ -29,6 +34,8 @@ export function ConnectionBar() {
   // retried by Socket.IO in the background. Both need a way out — otherwise the
   // only escape from a wrong address or an unreachable Pi is force-quitting.
   const isAttempting = connectionState === 'connecting' || connectionState === 'error';
+  const { scheme, colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
 
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
 
@@ -54,7 +61,9 @@ export function ConnectionBar() {
       <View style={styles.header}>
         <Text style={styles.title}>OpenFlight</Text>
         <View style={styles.statusPill}>
-          <View style={[styles.statusDot, { backgroundColor: STATUS_COLOR[connectionState] }]} />
+          <View
+            style={[styles.statusDot, { backgroundColor: colors[STATUS_COLOR[connectionState]] }]}
+          />
           <Text style={styles.statusText}>{STATUS_LABEL[connectionState]}</Text>
         </View>
       </View>
@@ -81,6 +90,8 @@ export function ConnectionBar() {
             value={serverUrl}
             onChangeText={setServerUrl}
             placeholder="http://<pi-ip>:8080"
+            placeholderTextColor={colors.textFaint}
+            keyboardAppearance={scheme}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
@@ -111,94 +122,114 @@ export function ConnectionBar() {
   );
 }
 
-const styles = StyleSheet.create({
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#1a1a1a',
-  },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  statusText: {
-    fontSize: 12,
-    color: '#666',
-  },
-  connectRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 12,
-    marginBottom: 4,
-  },
-  input: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  connectButton: {
-    backgroundColor: '#1a7f37',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    justifyContent: 'center',
-  },
-  connectButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  cancelButton: {
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#ccc',
-  },
-  cancelButtonText: {
-    color: '#666',
-    fontWeight: '600',
-  },
-  connectedBar: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 12,
-    marginBottom: 4,
-  },
-  simulateButton: {
-    flex: 1,
-    backgroundColor: '#0969da',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  simulateButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  disconnectButton: {
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#ccc',
-  },
-  disconnectButtonText: {
-    color: '#666',
-    fontWeight: '600',
-  },
-});
+const createStyles = (c: Palette) =>
+  StyleSheet.create({
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    title: {
+      fontSize: 26,
+      fontFamily: fontFamily.bold,
+      color: c.text,
+    },
+    statusPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 10,
+      paddingVertical: spacing.xs,
+      borderRadius: radius.pill,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      backgroundColor: c.surface,
+    },
+    statusDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+    },
+    statusText: {
+      fontSize: 12,
+      fontFamily: fontFamily.medium,
+      color: c.textMuted,
+    },
+    connectRow: {
+      flexDirection: 'row',
+      gap: spacing.sm,
+      marginTop: spacing.md,
+      marginBottom: spacing.xs,
+    },
+    input: {
+      flex: 1,
+      minHeight: 44,
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: radius.control,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      backgroundColor: c.surface,
+      color: c.text,
+      fontFamily: fontFamily.regular,
+      fontSize: 15,
+    },
+    connectButton: {
+      minHeight: 44,
+      backgroundColor: c.accentBlock,
+      borderRadius: radius.control,
+      paddingHorizontal: spacing.lg,
+      justifyContent: 'center',
+    },
+    connectButtonText: {
+      color: c.accentFg,
+      fontFamily: fontFamily.semibold,
+      fontSize: 15,
+    },
+    cancelButton: {
+      minHeight: 44,
+      borderRadius: radius.control,
+      paddingHorizontal: spacing.lg,
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: c.border,
+    },
+    cancelButtonText: {
+      color: c.text,
+      fontFamily: fontFamily.semibold,
+      fontSize: 15,
+    },
+    connectedBar: {
+      flexDirection: 'row',
+      gap: spacing.sm,
+      marginTop: spacing.md,
+      marginBottom: spacing.xs,
+    },
+    simulateButton: {
+      flex: 1,
+      minHeight: 44,
+      backgroundColor: c.accentBlock,
+      borderRadius: radius.control,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    simulateButtonText: {
+      color: c.accentFg,
+      fontFamily: fontFamily.semibold,
+      fontSize: 15,
+    },
+    disconnectButton: {
+      minHeight: 44,
+      borderRadius: radius.control,
+      paddingHorizontal: spacing.lg,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: c.border,
+    },
+    disconnectButtonText: {
+      color: c.text,
+      fontFamily: fontFamily.semibold,
+      fontSize: 15,
+    },
+  });
