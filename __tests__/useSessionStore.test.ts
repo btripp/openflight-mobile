@@ -27,6 +27,25 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
   };
 }
 
+describe('session identity', () => {
+  it('starts a session so the shots of one visit can be grouped together', () => {
+    useSessionStore.getState().startSession();
+
+    expect(useSessionStore.getState().sessionId).toEqual(expect.any(String));
+  });
+
+  it('gives each visit its own id, even two in the same millisecond', () => {
+    // A session is one connection span; reconnecting twice in quick succession
+    // must not merge those visits into a single history entry.
+    useSessionStore.getState().startSession();
+    const first = useSessionStore.getState().sessionId;
+
+    useSessionStore.getState().startSession();
+
+    expect(useSessionStore.getState().sessionId).not.toBe(first);
+  });
+});
+
 // Reset to initial state between tests — the store is a module singleton.
 beforeEach(() => {
   useSessionStore.setState({ connectionState: 'disconnected', shots: [] });

@@ -25,6 +25,27 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
 
+// Stand-in for the on-device history. Built inside the factory for the same
+// temporal-dead-zone reason as the socket fake above; the repository itself is
+// covered against a real database in shotRepository.test.ts.
+jest.mock('../storage/db', () => {
+  const insertShot = jest.fn(() => Promise.resolve());
+  return {
+    getShotRepository: jest.fn(() => Promise.resolve({ insertShot })),
+    __mock: { insertShot },
+  };
+});
+
+const dbMock = jest.requireMock('../storage/db') as {
+  getShotRepository: jest.Mock;
+  __mock: { insertShot: jest.Mock };
+};
+const { insertShot: mockInsertShot } = dbMock.__mock;
+
+// Persistence is deliberately fire-and-forget, so the write lands a microtask
+// after the event; flush before asserting on it.
+const flushPendingWrites = () => new Promise<void>((resolve) => setImmediate(() => resolve()));
+
 const socketMock = jest.requireMock('socket.io-client') as {
   io: jest.Mock;
   __mock: {
@@ -64,11 +85,13 @@ function makeShot(timestamp: string): Shot {
 }
 
 beforeEach(() => {
-  useSessionStore.setState({ connectionState: 'disconnected', shots: [] });
+  useSessionStore.setState({ connectionState: 'disconnected', sessionId: null, shots: [] });
   for (const key of Object.keys(mockHandlers)) delete mockHandlers[key];
   mockIo.mockClear();
   mockEmit.mockClear();
   mockClose.mockClear();
+  mockInsertShot.mockClear();
+  mockInsertShot.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -170,6 +193,40 @@ describe('socketService', () => {
     expect(mockIo).toHaveBeenCalledTimes(2); // a fresh attempt, not swallowed
     expect(mockClose).toHaveBeenCalledTimes(1); // the failed socket is torn down
     expect(useSessionStore.getState().connectionState).toBe('connecting');
+  });
+
+  it('starts a session once the connection is established', () => {
+    // Shots are filed under a session, so one has to exist before any arrive.
+    socketService.connect('http://host:8080');
+    expect(useSessionStore.getState().sessionId).toBeNull();
+
+    trigger('connect');
+
+    expect(useSessionStore.getState().sessionId).toEqual(expect.any(String));
+  });
+
+  it('writes each arriving shot into history under the current session', async () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    const shot = makeShot('t1');
+
+    trigger('shot', { shot });
+    await flushPendingWrites();
+
+    expect(mockInsertShot).toHaveBeenCalledTimes(1);
+    expect(mockInsertShot).toHaveBeenCalledWith(useSessionStore.getState().sessionId, shot);
+  });
+
+  it('still shows the shot when writing it to history fails', async () => {
+    // A storage fault must cost history, never the shot the player just hit.
+    mockInsertShot.mockRejectedValueOnce(new Error('disk full'));
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('shot', { shot: makeShot('t1') });
+    await flushPendingWrites();
+
+    expect(useSessionStore.getState().shots).toHaveLength(1);
   });
 
   it('simulateShot emits the simulate_shot event', () => {
