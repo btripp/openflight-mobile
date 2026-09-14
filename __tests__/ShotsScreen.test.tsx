@@ -1,5 +1,5 @@
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react-native';
 import ShotsScreen from '../app/(tabs)/shots';
 import { useSessionStore } from '../stores/useSessionStore';
 import type { Shot } from '../types';
@@ -15,11 +15,40 @@ jest.mock('../storage/db', () => {
   };
 });
 
+// expo-router's useFocusEffect needs a navigator to drive it. Standing in for it
+// here runs the effect on mount, as the real hook does, and keeps hold of it so
+// a test can re-run it the way returning to the tab would.
+jest.mock('expo-router', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { useEffect } = require('react');
+  const state: { effect: (() => void | (() => void)) | null } = { effect: null };
+  return {
+    useFocusEffect: (effect: () => void | (() => void)) => {
+      state.effect = effect;
+      useEffect(() => effect(), [effect]);
+    },
+    __mock: state,
+  };
+});
+
 const { loadSessions: mockLoadSessions, loadShots: mockLoadShots } = (
   jest.requireMock('../storage/db') as {
     __mock: { loadSessions: jest.Mock; loadShots: jest.Mock };
   }
 ).__mock;
+
+const routerMock = (
+  jest.requireMock('expo-router') as {
+    __mock: { effect: (() => void | (() => void)) | null };
+  }
+).__mock;
+
+// Re-runs the screen's focus effect, which is what returning to this tab does.
+async function returnToTab() {
+  await act(async () => {
+    routerMock.effect?.();
+  });
+}
 
 // The tab navigator supplies safe-area metrics in the app; this screen renders
 // on its own here, so the provider is given fixed insets.
@@ -38,6 +67,7 @@ function renderScreen() {
 
 function makeShot(overrides: Partial<Shot> = {}): Shot {
   return {
+    shot_number: 1,
     ball_speed_mph: 148.2,
     club_speed_mph: 104.1,
     smash_factor: 1.42,
@@ -45,6 +75,8 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     carry_spin_adjusted: null,
     carry_range: [258, 274],
     club: 'driver',
+    profile_id: null,
+    profile_name: null,
     timestamp: '2026-09-14T10:00:00Z',
     launch_angle_vertical: 12.4,
     launch_angle_horizontal: null,
@@ -69,6 +101,7 @@ const SESSION = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  routerMock.effect = null;
   useSessionStore.setState({ connectionState: 'disconnected', sessionId: null, shots: [] });
   mockLoadSessions.mockResolvedValue([]);
   mockLoadShots.mockResolvedValue([]);
@@ -171,6 +204,22 @@ describe('Shots screen', () => {
     expect(await screen.findAllByText('—')).toHaveLength(2);
   });
 
+  it('names the player on each row so a shared session can be told apart', async () => {
+    // Two people hitting in one bay produce a single session; the row has to
+    // say whose shot it was.
+    mockLoadSessions.mockResolvedValue([SESSION]);
+    mockLoadShots.mockResolvedValue([
+      makeShot({ shot_number: 1, club: '7 iron', profile_id: 'p1', profile_name: 'Alex' }),
+      makeShot({ shot_number: 2, club: 'driver', profile_id: 'p2', profile_name: 'Sam' }),
+    ]);
+
+    await renderScreen();
+    await fireEvent.press(await screen.findByText('2 shots'));
+
+    expect(await screen.findByText(/Alex/)).toBeTruthy();
+    expect(screen.getByText(/Sam/)).toBeTruthy();
+  });
+
   it('goes back to the session list from an open session', async () => {
     mockLoadSessions.mockResolvedValue([SESSION]);
     mockLoadShots.mockResolvedValue([makeShot()]);
@@ -190,5 +239,32 @@ describe('Shots screen', () => {
 
     expect(await screen.findByText('No shots yet')).toBeTruthy();
     expect(screen.getByText('Recorded shots appear here')).toBeTruthy();
+  });
+});
+
+describe('returning to the Shots tab', () => {
+  it('picks up shots hit while the Live tab was in front', async () => {
+    // Reading history only on mount meant a session recorded during this launch
+    // stayed invisible until the app was restarted.
+    mockLoadSessions.mockResolvedValue([]);
+    await renderScreen();
+    expect(await screen.findByText('No shots yet')).toBeTruthy();
+
+    mockLoadSessions.mockResolvedValue([SESSION]);
+    await returnToTab();
+
+    expect(await screen.findByText('2 shots')).toBeTruthy();
+  });
+
+  it('re-reads history on every visit, not just the first', async () => {
+    mockLoadSessions.mockResolvedValue([SESSION]);
+
+    await renderScreen();
+    expect(await screen.findByText('2 shots')).toBeTruthy();
+    expect(mockLoadSessions).toHaveBeenCalledTimes(1);
+
+    await returnToTab();
+
+    expect(mockLoadSessions).toHaveBeenCalledTimes(2);
   });
 });

@@ -10,6 +10,11 @@ export type AngleQuality = 'high' | 'medium' | 'low';
 
 export interface Shot {
   mode?: 'rolling-buffer' | 'mock' | 'swing-speed';
+  // The server's identity for a shot, assigned before any async work and never
+  // reassigned. A shot can reach the client twice -- provisionally as `shot`,
+  // then again as `shot_update` once enrichment finishes -- and this is what
+  // ties the two together.
+  shot_number: number | null;
   ball_speed_mph: number;
   club_speed_mph: number | null;
   smash_factor: number | null;
@@ -17,6 +22,10 @@ export interface Shot {
   carry_spin_adjusted: number | null;
   carry_range: [number, number];
   club: string;
+  // The profile that was active when the shot was struck. Two people sharing a
+  // bay produce one session, so this is what keeps their histories apart.
+  profile_id: string | null;
+  profile_name: string | null;
   timestamp: string;
   // Launch angle data (radar/camera/estimation; "mock" in mock mode)
   launch_angle_vertical: number | null;
@@ -41,6 +50,11 @@ export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'err
 
 // `shot` event payload. The web UI also receives `stats` alongside the shot;
 // mobile derives its own stats from the shot list, so only `shot` is modelled.
+//
+// `shot_update` carries the same envelope: the server re-emits a shot it has
+// already sent, under the same shot_number, once optional hardware enrichment
+// finishes or is skipped. Its extra `stats`, `pending` and `enrichment` keys
+// are not modelled because mobile does not read them.
 export interface ShotEnvelope {
   shot: Shot;
 }

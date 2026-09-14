@@ -5,6 +5,7 @@ import type { Shot } from '../types';
 // need to be distinct; the rest are filled with representative values.
 function makeShot(overrides: Partial<Shot> = {}): Shot {
   return {
+    shot_number: 1,
     ball_speed_mph: 100,
     club_speed_mph: 70,
     smash_factor: 1.43,
@@ -12,6 +13,8 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     carry_spin_adjusted: null,
     carry_range: [240, 260],
     club: 'driver',
+    profile_id: null,
+    profile_name: null,
     timestamp: '2026-08-18T00:00:00Z',
     launch_angle_vertical: null,
     launch_angle_horizontal: null,
@@ -100,5 +103,57 @@ describe('useSessionStore', () => {
     useSessionStore.getState().setShots([makeShot(), makeShot()]);
     useSessionStore.getState().clearShots();
     expect(useSessionStore.getState().shots).toEqual([]);
+  });
+});
+
+describe('an enriched shot replacing its provisional version', () => {
+  it('updates the shot in place instead of listing it twice', () => {
+    // The server publishes provisional metrics as `shot`, then republishes the
+    // same shot_number as `shot_update` once optional hardware finishes. Both
+    // land on the live list, so without matching on shot_number the player
+    // sees one swing as two.
+    useSessionStore.getState().addShot(makeShot({ shot_number: 7, spin_rpm: null }));
+
+    useSessionStore.getState().replaceShot(makeShot({ shot_number: 7, spin_rpm: 2680 }));
+
+    const shots = useSessionStore.getState().shots;
+    expect(shots).toHaveLength(1);
+    expect(shots[0].spin_rpm).toBe(2680);
+  });
+
+  it('leaves the other shots of the session where they were', () => {
+    // An update for an earlier shot must not reorder the list around it.
+    useSessionStore
+      .getState()
+      .setShots([
+        makeShot({ shot_number: 1, club: '7 iron' }),
+        makeShot({ shot_number: 2, club: 'driver' }),
+      ]);
+
+    useSessionStore
+      .getState()
+      .replaceShot(makeShot({ shot_number: 1, club: '7 iron', spin_rpm: 6820 }));
+
+    const shots = useSessionStore.getState().shots;
+    expect(shots.map((shot) => shot.shot_number)).toEqual([2, 1]);
+    expect(shots[1].spin_rpm).toBe(6820);
+  });
+
+  it('keeps an update for a shot it never saw rather than dropping it', () => {
+    // A phone that connects mid-flight can receive the update without the
+    // provisional shot that preceded it; losing that shot would be worse than
+    // showing it late.
+    useSessionStore.getState().replaceShot(makeShot({ shot_number: 9 }));
+
+    expect(useSessionStore.getState().shots).toHaveLength(1);
+  });
+
+  it('keeps an unnumbered update rather than matching it to the wrong shot', () => {
+    // shot_number is nullable on the wire; two nulls are not the same shot.
+    useSessionStore.getState().addShot(makeShot({ shot_number: null, club: 'driver' }));
+
+    useSessionStore.getState().replaceShot(makeShot({ shot_number: null, club: '7 iron' }));
+
+    expect(useSessionStore.getState().shots).toHaveLength(2);
   });
 });

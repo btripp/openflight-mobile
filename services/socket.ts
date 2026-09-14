@@ -75,7 +75,7 @@ class SocketService {
       if (sessionId === null) return;
 
       const repository = await getShotRepository();
-      await repository.insertShot(sessionId, shot);
+      await repository.saveShot(sessionId, shot);
     } catch {
       // History loses a shot; the live view already has it.
     }
@@ -115,6 +115,16 @@ class SocketService {
       // Deliberately not awaited: the tile on screen must never wait on a disk
       // write. The repository swallows its own failures, so history is what is
       // lost when storage misbehaves, not the shot.
+      void this.persistShot(data.shot);
+    });
+
+    // When optional hardware can add seconds to a shot, the server publishes
+    // provisional metrics as `shot` and then re-publishes the same shot — same
+    // shot_number — as `shot_update`, either enriched or marked skipped. Both
+    // the live list and history therefore update that shot rather than gaining
+    // a second copy of it.
+    socket.on('shot_update', (data: ShotEnvelope) => {
+      store().replaceShot(data.shot);
       void this.persistShot(data.shot);
     });
   }

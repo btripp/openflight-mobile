@@ -15,13 +15,6 @@ export interface ShotDatabase {
   getFirstAsync<T>(source: string, params?: unknown[]): Promise<T | null>;
 }
 
-// Which player a shot belongs to. The server stamps every shot with its profile,
-// so two people sharing a bay keep separate histories.
-export interface ShotAttribution {
-  profileId: string | null;
-  profileName: string | null;
-}
-
 export interface SessionSummary {
   sessionId: string;
   shotCount: number;
@@ -31,7 +24,7 @@ export interface SessionSummary {
 
 export interface ShotRepository {
   init(): Promise<void>;
-  insertShot(sessionId: string, shot: Shot, attribution?: ShotAttribution): Promise<void>;
+  saveShot(sessionId: string, shot: Shot): Promise<void>;
   loadShots(sessionId: string, filter?: { profileId?: string }): Promise<Shot[]>;
   loadSessions(): Promise<SessionSummary[]>;
   clearAll(): Promise<void>;
@@ -39,7 +32,7 @@ export interface ShotRepository {
 
 // Bump alongside a new entry in MIGRATIONS; init() applies only what is missing,
 // so an existing database is upgraded rather than recreated.
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const MIGRATIONS: string[] = [
   `CREATE TABLE IF NOT EXISTS shots (
@@ -70,14 +63,21 @@ const MIGRATIONS: string[] = [
    );
    CREATE INDEX IF NOT EXISTS idx_shots_session ON shots(session_id, timestamp DESC);
    CREATE INDEX IF NOT EXISTS idx_shots_club ON shots(club);`,
+  // v2: the server's shot identity, so an enriched re-emit of a shot already
+  // stored updates that row instead of landing beside it.
+  `ALTER TABLE shots ADD COLUMN shot_number INTEGER;
+   CREATE INDEX IF NOT EXISTS idx_shots_session_number ON shots(session_id, shot_number);`,
 ];
 
 // Row shape as stored. carry_range is a tuple in the wire contract, so it is
 // flattened into two columns here and reassembled on read.
 interface ShotRow {
+  shot_number: number | null;
   timestamp: string;
   club: string;
   mode: string | null;
+  profile_id: string | null;
+  profile_name: string | null;
   ball_speed_mph: number;
   club_speed_mph: number | null;
   smash_factor: number | null;
@@ -101,6 +101,7 @@ function rowToShot(row: ShotRow): Shot {
   return {
     // Absent in storage means absent on the wire, not a mode of its own.
     ...(row.mode === null ? {} : { mode: row.mode as Shot['mode'] }),
+    shot_number: row.shot_number,
     ball_speed_mph: row.ball_speed_mph,
     club_speed_mph: row.club_speed_mph,
     smash_factor: row.smash_factor,
@@ -108,6 +109,8 @@ function rowToShot(row: ShotRow): Shot {
     carry_spin_adjusted: row.carry_spin_adjusted,
     carry_range: [row.carry_range_low, row.carry_range_high],
     club: row.club,
+    profile_id: row.profile_id,
+    profile_name: row.profile_name,
     timestamp: row.timestamp,
     launch_angle_vertical: row.launch_angle_vertical,
     launch_angle_horizontal: row.launch_angle_horizontal,
@@ -120,6 +123,66 @@ function rowToShot(row: ShotRow): Shot {
     spin_source: row.spin_source as Shot['spin_source'],
     spin_quality: row.spin_quality as SpinQuality | null,
   };
+}
+
+// The server leaves an unset profile as an empty string rather than null;
+// storing that verbatim would make "" look like a profile you could filter on.
+function orNull(value: string | null | undefined): string | null {
+  return value === undefined || value === null || value === '' ? null : value;
+}
+
+// One column order shared by the insert and the update, so the two cannot drift
+// apart as fields are added.
+const MEASUREMENT_COLUMNS = [
+  'timestamp',
+  'club',
+  'mode',
+  'profile_id',
+  'profile_name',
+  'ball_speed_mph',
+  'club_speed_mph',
+  'smash_factor',
+  'estimated_carry_yards',
+  'carry_spin_adjusted',
+  'carry_range_low',
+  'carry_range_high',
+  'launch_angle_vertical',
+  'launch_angle_horizontal',
+  'launch_angle_confidence',
+  'angle_source',
+  'club_angle_deg',
+  'club_path_deg',
+  'spin_axis_deg',
+  'spin_rpm',
+  'spin_source',
+  'spin_quality',
+] as const;
+
+function measurementValues(shot: Shot): unknown[] {
+  return [
+    shot.timestamp,
+    shot.club,
+    shot.mode ?? null,
+    orNull(shot.profile_id),
+    orNull(shot.profile_name),
+    shot.ball_speed_mph,
+    shot.club_speed_mph,
+    shot.smash_factor,
+    shot.estimated_carry_yards,
+    shot.carry_spin_adjusted,
+    shot.carry_range[0],
+    shot.carry_range[1],
+    shot.launch_angle_vertical,
+    shot.launch_angle_horizontal,
+    shot.launch_angle_confidence,
+    shot.angle_source,
+    shot.club_angle_deg,
+    shot.club_path_deg,
+    shot.spin_axis_deg,
+    shot.spin_rpm,
+    shot.spin_source,
+    shot.spin_quality,
+  ];
 }
 
 export function createShotRepository(db: ShotDatabase): ShotRepository {
@@ -140,42 +203,35 @@ export function createShotRepository(db: ShotDatabase): ShotRepository {
       }
     },
 
-    async insertShot(sessionId, shot, attribution) {
+    // The single write path for both `shot` and `shot_update`. The server
+    // re-emits an enriched shot under the same shot_number, so a shot already
+    // filed is updated in place. A shot the server could not number — nullable
+    // on the wire, though a supported server always sets it — is appended,
+    // which is the old behaviour and cannot collide with anything.
+    async saveShot(sessionId, shot) {
       try {
+        const existing =
+          shot.shot_number === null
+            ? null
+            : await db.getFirstAsync<{ id: number }>(
+                'SELECT id FROM shots WHERE session_id = ? AND shot_number = ?',
+                [sessionId, shot.shot_number],
+              );
+
+        if (existing) {
+          await db.runAsync(
+            `UPDATE shots SET ${MEASUREMENT_COLUMNS.map((column) => `${column} = ?`).join(', ')}
+             WHERE id = ?`,
+            [...measurementValues(shot), existing.id],
+          );
+          return;
+        }
+
+        const columns = ['session_id', 'shot_number', ...MEASUREMENT_COLUMNS];
         await db.runAsync(
-          `INSERT INTO shots (
-             session_id, timestamp, club, mode, profile_id, profile_name,
-             ball_speed_mph, club_speed_mph, smash_factor, estimated_carry_yards,
-             carry_spin_adjusted, carry_range_low, carry_range_high,
-             launch_angle_vertical, launch_angle_horizontal, launch_angle_confidence,
-             angle_source, club_angle_deg, club_path_deg, spin_axis_deg,
-             spin_rpm, spin_source, spin_quality
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            sessionId,
-            shot.timestamp,
-            shot.club,
-            shot.mode ?? null,
-            attribution?.profileId ?? null,
-            attribution?.profileName ?? null,
-            shot.ball_speed_mph,
-            shot.club_speed_mph,
-            shot.smash_factor,
-            shot.estimated_carry_yards,
-            shot.carry_spin_adjusted,
-            shot.carry_range[0],
-            shot.carry_range[1],
-            shot.launch_angle_vertical,
-            shot.launch_angle_horizontal,
-            shot.launch_angle_confidence,
-            shot.angle_source,
-            shot.club_angle_deg,
-            shot.club_path_deg,
-            shot.spin_axis_deg,
-            shot.spin_rpm,
-            shot.spin_source,
-            shot.spin_quality,
-          ],
+          `INSERT INTO shots (${columns.join(', ')})
+           VALUES (${columns.map(() => '?').join(', ')})`,
+          [sessionId, shot.shot_number, ...measurementValues(shot)],
         );
       } catch {
         // A dropped write loses one shot from history; the live view is unaffected.

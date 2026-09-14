@@ -31,6 +31,11 @@ interface SessionState {
   setShots: (serverShots: Shot[]) => void;
   // Prepend a single shot from a `shot` event.
   addShot: (shot: Shot) => void;
+  // Swap in the server's updated version of a shot already on the list, from a
+  // `shot_update` event, matched on shot_number. An update for a shot this
+  // client never saw — or one the server could not number — is prepended
+  // instead, so an enriched shot is never silently dropped.
+  replaceShot: (shot: Shot) => void;
   clearShots: () => void;
 }
 
@@ -45,5 +50,16 @@ export const useSessionStore = create<SessionState>((set) => ({
   startSession: () => set({ sessionId: `${Date.now()}-${++sessionCounter}` }),
   setShots: (serverShots) => set({ shots: [...serverShots].reverse() }),
   addShot: (shot) => set((prev) => ({ shots: [shot, ...prev.shots] })),
+  replaceShot: (shot) =>
+    set((prev) => {
+      const index =
+        shot.shot_number === null
+          ? -1
+          : prev.shots.findIndex((existing) => existing.shot_number === shot.shot_number);
+      if (index === -1) return { shots: [shot, ...prev.shots] };
+      const shots = [...prev.shots];
+      shots[index] = shot;
+      return { shots };
+    }),
   clearShots: () => set({ shots: [] }),
 }));

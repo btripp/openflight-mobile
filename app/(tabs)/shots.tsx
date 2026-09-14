@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -8,6 +8,10 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from 'expo-router';
+import { fontFamily } from '../../components/theme/fonts';
+import { spacing, type Palette } from '../../components/theme/tokens';
+import { useThemedStyles } from '../../components/theme/useTheme';
 import { getShotRepository } from '../../storage/db';
 import type { SessionSummary } from '../../storage/shotRepository';
 import type { Shot } from '../../types';
@@ -83,6 +87,8 @@ function summarise(shots: Shot[]): SessionStats {
 }
 
 function StatTile({ label, value }: { label: string; value: string }) {
+  const styles = useThemedStyles(createStyles);
+
   return (
     <View style={styles.tile}>
       <Text style={styles.tileValue}>{value}</Text>
@@ -92,6 +98,8 @@ function StatTile({ label, value }: { label: string; value: string }) {
 }
 
 function SessionStatsGrid({ stats }: { stats: SessionStats }) {
+  const styles = useThemedStyles(createStyles);
+
   return (
     <View style={styles.tiles} testID="session-stats">
       <StatTile label="Shots" value={String(stats.count)} />
@@ -108,11 +116,19 @@ function SessionStatsGrid({ stats }: { stats: SessionStats }) {
 }
 
 function ShotRow({ shot }: { shot: Shot }) {
+  const styles = useThemedStyles(createStyles);
+
   return (
     <View style={styles.row}>
       <View style={styles.rowHead}>
         <Text style={styles.rowClub}>{shot.club}</Text>
-        <Text style={styles.rowTime}>{shotTime(shot.timestamp)}</Text>
+        {/* Two people sharing a bay land in one session, so whose shot it was
+            has to be readable on the row itself. */}
+        <Text style={styles.rowTime}>
+          {shot.profile_name === null
+            ? shotTime(shot.timestamp)
+            : `${shotTime(shot.timestamp)} · ${shot.profile_name}`}
+        </Text>
       </View>
       <Text style={styles.cell}>{speed(shot.ball_speed_mph)}</Text>
       <Text style={styles.cell}>{speed(shot.club_speed_mph)}</Text>
@@ -124,6 +140,8 @@ function ShotRow({ shot }: { shot: Shot }) {
 }
 
 function EmptyHistory() {
+  const styles = useThemedStyles(createStyles);
+
   return (
     <View style={styles.empty}>
       <Text style={styles.emptyTitle}>No shots yet</Text>
@@ -133,23 +151,28 @@ function EmptyHistory() {
 }
 
 export default function ShotsScreen() {
+  const styles = useThemedStyles(createStyles);
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [openSession, setOpenSession] = useState<SessionSummary | null>(null);
   const [shots, setShots] = useState<Shot[] | null>(null);
 
-  // History is read on mount; the repository degrades to an empty list rather
-  // than throwing, so there is no error branch to render.
-  useEffect(() => {
-    let active = true;
-    void (async () => {
-      const repository = await getShotRepository();
-      const stored = await repository.loadSessions();
-      if (active) setSessions(stored);
-    })();
-    return () => {
-      active = false;
-    };
-  }, []);
+  // History is re-read every time the tab regains focus, not only on mount: a
+  // shot hit while the Live tab was in front has to show up here without
+  // relaunching the app. The repository degrades to an empty list rather than
+  // throwing, so there is no error branch to render.
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      void (async () => {
+        const repository = await getShotRepository();
+        const stored = await repository.loadSessions();
+        if (active) setSessions(stored);
+      })();
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   const open = useCallback(async (session: SessionSummary) => {
     setOpenSession(session);
@@ -233,134 +256,142 @@ export default function ShotsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 8,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#1a1a1a',
-  },
-  back: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#0969da',
-    paddingVertical: 8,
-  },
-  loading: {
-    marginTop: 32,
-  },
-  session: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    minHeight: 56,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e1e4e8',
-  },
-  sessionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
-  sessionDetail: {
-    fontSize: 12,
-    color: '#999',
-  },
-  sessionCount: {
-    fontSize: 14,
-    color: '#666',
-  },
-  tiles: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    paddingHorizontal: 12,
-    paddingBottom: 8,
-  },
-  tile: {
-    width: '33.33%',
-    paddingHorizontal: 4,
-    paddingVertical: 8,
-  },
-  tileValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1a1a1a',
-  },
-  tileLabel: {
-    fontSize: 11,
-    color: '#666',
-    textTransform: 'uppercase',
-  },
-  columns: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingBottom: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e1e4e8',
-  },
-  columnLabel: {
-    flex: 1,
-    fontSize: 11,
-    color: '#999',
-    textTransform: 'uppercase',
-    textAlign: 'right',
-  },
-  columnShot: {
-    flex: 1.6,
-    textAlign: 'left',
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: 48,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#f0f2f4',
-  },
-  rowHead: {
-    flex: 1.6,
-  },
-  rowClub: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
-  rowTime: {
-    fontSize: 11,
-    color: '#999',
-  },
-  cell: {
-    flex: 1,
-    fontSize: 14,
-    color: '#1a1a1a',
-    textAlign: 'right',
-  },
-  empty: {
-    alignItems: 'center',
-    paddingTop: 48,
-    gap: 4,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
-  emptyDetail: {
-    fontSize: 13,
-    color: '#999',
-  },
-});
+const createStyles = (c: Palette) =>
+  StyleSheet.create({
+    safe: {
+      flex: 1,
+      backgroundColor: c.bg,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.sm,
+    },
+    title: {
+      fontSize: 24,
+      fontFamily: fontFamily.bold,
+      color: c.text,
+    },
+    back: {
+      fontSize: 16,
+      fontFamily: fontFamily.semibold,
+      color: c.accentText,
+      paddingVertical: spacing.sm,
+    },
+    loading: {
+      marginTop: spacing.xl,
+    },
+    session: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      minHeight: 56,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderSoft,
+    },
+    sessionTitle: {
+      fontSize: 16,
+      fontFamily: fontFamily.semibold,
+      color: c.text,
+    },
+    sessionDetail: {
+      fontSize: 12,
+      fontFamily: fontFamily.regular,
+      color: c.textFaint,
+    },
+    sessionCount: {
+      fontSize: 14,
+      fontFamily: fontFamily.regular,
+      color: c.textMuted,
+    },
+    tiles: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      paddingHorizontal: spacing.md,
+      paddingBottom: spacing.sm,
+    },
+    tile: {
+      width: '33.33%',
+      paddingHorizontal: spacing.xs,
+      paddingVertical: spacing.sm,
+    },
+    tileValue: {
+      fontSize: 18,
+      fontFamily: fontFamily.bold,
+      color: c.text,
+    },
+    tileLabel: {
+      fontSize: 11,
+      fontFamily: fontFamily.regular,
+      color: c.textMuted,
+      textTransform: 'uppercase',
+    },
+    columns: {
+      flexDirection: 'row',
+      paddingHorizontal: spacing.lg,
+      paddingBottom: spacing.xs,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    columnLabel: {
+      flex: 1,
+      fontSize: 11,
+      fontFamily: fontFamily.regular,
+      color: c.textFaint,
+      textTransform: 'uppercase',
+      textAlign: 'right',
+    },
+    columnShot: {
+      flex: 1.6,
+      textAlign: 'left',
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      minHeight: 48,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderSoft,
+    },
+    rowHead: {
+      flex: 1.6,
+    },
+    rowClub: {
+      fontSize: 14,
+      fontFamily: fontFamily.semibold,
+      color: c.text,
+    },
+    rowTime: {
+      fontSize: 11,
+      fontFamily: fontFamily.regular,
+      color: c.textFaint,
+    },
+    cell: {
+      flex: 1,
+      fontSize: 14,
+      fontFamily: fontFamily.regular,
+      color: c.text,
+      textAlign: 'right',
+    },
+    empty: {
+      alignItems: 'center',
+      paddingTop: 48,
+      gap: spacing.xs,
+    },
+    emptyTitle: {
+      fontSize: 16,
+      fontFamily: fontFamily.semibold,
+      color: c.text,
+    },
+    emptyDetail: {
+      fontSize: 13,
+      fontFamily: fontFamily.regular,
+      color: c.textMuted,
+    },
+  });
