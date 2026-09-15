@@ -19,6 +19,7 @@ jest.mock(
 );
 
 const shot: Shot = {
+  shot_number: 1,
   ball_speed_mph: 152.4,
   club_speed_mph: 104.2,
   smash_factor: 1.46,
@@ -26,6 +27,8 @@ const shot: Shot = {
   carry_spin_adjusted: null,
   carry_range: [235, 250],
   club: 'driver',
+  profile_id: null,
+  profile_name: null,
   timestamp: '2026-09-11T12:00:00Z',
   launch_angle_vertical: 12.3,
   launch_angle_horizontal: null,

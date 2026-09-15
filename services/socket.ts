@@ -1,7 +1,8 @@
 import { io, type Socket } from 'socket.io-client';
 import { useSessionStore } from '../stores/useSessionStore';
 import { saveServerUrl } from '../storage/connection';
-import type { SessionStatePayload, ShotEnvelope } from '../types';
+import { getShotRepository } from '../storage/db';
+import type { SessionStatePayload, Shot, ShotEnvelope } from '../types';
 
 // Singleton Socket.IO client, mirroring the web app's socketService shape: one
 // place that maps every server event onto a store mutation. Kept out of the
@@ -64,11 +65,30 @@ class SocketService {
     this.socket?.emit('simulate_shot');
   }
 
+  // Files one shot under the current visit. Callers fire and forget, so this
+  // absorbs every failure itself rather than leaving a rejected promise loose.
+  private async persistShot(shot: Shot): Promise<void> {
+    try {
+      const { sessionId } = useSessionStore.getState();
+      // Shots only arrive over an established connection, which is what starts
+      // a session; without one there is nothing to file this under.
+      if (sessionId === null) return;
+
+      const repository = await getShotRepository();
+      await repository.saveShot(sessionId, shot);
+    } catch {
+      // History loses a shot; the live view already has it.
+    }
+  }
+
   private registerHandlers(socket: Socket, url: string): void {
     const store = useSessionStore.getState;
 
     socket.on('connect', () => {
       store().setConnectionState('connected');
+      // A session is one connection span, so every reconnect files the shots
+      // that follow under a fresh visit in on-device history.
+      store().startSession();
       // Remember a URL only once it actually connects, so we never persist a
       // typo'd address that never worked.
       void saveServerUrl(url);
@@ -92,6 +112,20 @@ class SocketService {
 
     socket.on('shot', (data: ShotEnvelope) => {
       store().addShot(data.shot);
+      // Deliberately not awaited: the tile on screen must never wait on a disk
+      // write. The repository swallows its own failures, so history is what is
+      // lost when storage misbehaves, not the shot.
+      void this.persistShot(data.shot);
+    });
+
+    // When optional hardware can add seconds to a shot, the server publishes
+    // provisional metrics as `shot` and then re-publishes the same shot — same
+    // shot_number — as `shot_update`, either enriched or marked skipped. Both
+    // the live list and history therefore update that shot rather than gaining
+    // a second copy of it.
+    socket.on('shot_update', (data: ShotEnvelope) => {
+      store().replaceShot(data.shot);
+      void this.persistShot(data.shot);
     });
   }
 }

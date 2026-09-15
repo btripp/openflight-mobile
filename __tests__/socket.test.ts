@@ -25,6 +25,27 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
 
+// Stand-in for the on-device history. Built inside the factory for the same
+// temporal-dead-zone reason as the socket fake above; the repository itself is
+// covered against a real database in shotRepository.test.ts.
+jest.mock('../storage/db', () => {
+  const saveShot = jest.fn(() => Promise.resolve());
+  return {
+    getShotRepository: jest.fn(() => Promise.resolve({ saveShot })),
+    __mock: { saveShot },
+  };
+});
+
+const dbMock = jest.requireMock('../storage/db') as {
+  getShotRepository: jest.Mock;
+  __mock: { saveShot: jest.Mock };
+};
+const { saveShot: mockSaveShot } = dbMock.__mock;
+
+// Persistence is deliberately fire-and-forget, so the write lands a microtask
+// after the event; flush before asserting on it.
+const flushPendingWrites = () => new Promise<void>((resolve) => setImmediate(() => resolve()));
+
 const socketMock = jest.requireMock('socket.io-client') as {
   io: jest.Mock;
   __mock: {
@@ -40,8 +61,9 @@ function trigger(event: string, ...args: unknown[]) {
   mockHandlers[event]?.(...args);
 }
 
-function makeShot(timestamp: string): Shot {
+function makeShot(timestamp: string, overrides: Partial<Shot> = {}): Shot {
   return {
+    shot_number: 1,
     ball_speed_mph: 100,
     club_speed_mph: null,
     smash_factor: null,
@@ -49,6 +71,8 @@ function makeShot(timestamp: string): Shot {
     carry_spin_adjusted: null,
     carry_range: [240, 260],
     club: 'driver',
+    profile_id: null,
+    profile_name: null,
     timestamp,
     launch_angle_vertical: null,
     launch_angle_horizontal: null,
@@ -60,15 +84,18 @@ function makeShot(timestamp: string): Shot {
     spin_rpm: null,
     spin_source: null,
     spin_quality: null,
+    ...overrides,
   };
 }
 
 beforeEach(() => {
-  useSessionStore.setState({ connectionState: 'disconnected', shots: [] });
+  useSessionStore.setState({ connectionState: 'disconnected', sessionId: null, shots: [] });
   for (const key of Object.keys(mockHandlers)) delete mockHandlers[key];
   mockIo.mockClear();
   mockEmit.mockClear();
   mockClose.mockClear();
+  mockSaveShot.mockClear();
+  mockSaveShot.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -139,7 +166,7 @@ describe('socketService', () => {
   it('shot event prepends the new shot', () => {
     socketService.connect('http://host:8080');
     trigger('session_state', { shots: [makeShot('t1')] });
-    trigger('shot', { shot: makeShot('t2') });
+    trigger('shot', { shot: makeShot('t2', { shot_number: 2 }) });
     const shots = useSessionStore.getState().shots;
     expect(shots).toHaveLength(2);
     expect(shots[0].timestamp).toBe('t2');
@@ -172,6 +199,55 @@ describe('socketService', () => {
     expect(useSessionStore.getState().connectionState).toBe('connecting');
   });
 
+  it('starts a session once the connection is established', () => {
+    // Shots are filed under a session, so one has to exist before any arrive.
+    socketService.connect('http://host:8080');
+    expect(useSessionStore.getState().sessionId).toBeNull();
+
+    trigger('connect');
+
+    expect(useSessionStore.getState().sessionId).toEqual(expect.any(String));
+  });
+
+  it('writes each arriving shot into history under the current session', async () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    const shot = makeShot('t1');
+
+    trigger('shot', { shot });
+    await flushPendingWrites();
+
+    expect(mockSaveShot).toHaveBeenCalledTimes(1);
+    expect(mockSaveShot).toHaveBeenCalledWith(useSessionStore.getState().sessionId, shot);
+  });
+
+  it('files the shot with the player the server attributed it to', async () => {
+    // Two people sharing a bay produce one session; without the profile the
+    // stored history cannot tell their shots apart.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('shot', { shot: makeShot('t1', { profile_id: 'p1', profile_name: 'Alex' }) });
+    await flushPendingWrites();
+
+    expect(mockSaveShot).toHaveBeenCalledWith(
+      useSessionStore.getState().sessionId,
+      expect.objectContaining({ profile_id: 'p1', profile_name: 'Alex' }),
+    );
+  });
+
+  it('still shows the shot when writing it to history fails', async () => {
+    // A storage fault must cost history, never the shot the player just hit.
+    mockSaveShot.mockRejectedValueOnce(new Error('disk full'));
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('shot', { shot: makeShot('t1') });
+    await flushPendingWrites();
+
+    expect(useSessionStore.getState().shots).toHaveLength(1);
+  });
+
   it('simulateShot emits the simulate_shot event', () => {
     socketService.connect('http://host:8080');
     mockEmit.mockClear();
@@ -184,5 +260,79 @@ describe('socketService', () => {
     socketService.disconnect();
     expect(mockClose).toHaveBeenCalledTimes(1);
     expect(useSessionStore.getState().connectionState).toBe('disconnected');
+  });
+});
+
+describe('a shot the server enriches after publishing it', () => {
+  it('shows one shot, with the final measurements, across the whole sequence', async () => {
+    // The server publishes provisional OPS metrics as `shot`, then republishes
+    // the same shot_number as `shot_update` once the slow hardware reports. The
+    // player hit one ball and must see one row.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('shot', { shot: makeShot('t1', { shot_number: 7, spin_rpm: null }) });
+    trigger('shot_update', { shot: makeShot('t1', { shot_number: 7, spin_rpm: 2680 }) });
+    await flushPendingWrites();
+
+    const shots = useSessionStore.getState().shots;
+    expect(shots).toHaveLength(1);
+    expect(shots[0].spin_rpm).toBe(2680);
+  });
+
+  it('files the update against the same shot instead of adding a second one', async () => {
+    // Both events go through the same keyed write, so history stores one row —
+    // the repository decides insert-or-update from the shot_number it is given.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    const sessionId = useSessionStore.getState().sessionId;
+
+    trigger('shot', { shot: makeShot('t1', { shot_number: 7, spin_rpm: null }) });
+    trigger('shot_update', { shot: makeShot('t1', { shot_number: 7, spin_rpm: 2680 }) });
+    await flushPendingWrites();
+
+    expect(mockSaveShot).toHaveBeenCalledTimes(2);
+    for (const call of mockSaveShot.mock.calls) {
+      expect(call[0]).toBe(sessionId);
+      expect((call[1] as Shot).shot_number).toBe(7);
+    }
+    expect((mockSaveShot.mock.calls[1][1] as Shot).spin_rpm).toBe(2680);
+  });
+
+  it('handles the skipped-enrichment update, which carries the shot unchanged', async () => {
+    // When the optional hardware cannot be admitted the server clears the
+    // pending state by republishing the same shot immediately.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('shot', { shot: makeShot('t1', { shot_number: 7 }) });
+    trigger('shot_update', { shot: makeShot('t1', { shot_number: 7 }) });
+    await flushPendingWrites();
+
+    expect(useSessionStore.getState().shots).toHaveLength(1);
+  });
+
+  it('keeps an update for a shot that arrived before this phone connected', async () => {
+    // Connecting mid-flight can deliver the update without its provisional
+    // shot; dropping it would lose the swing entirely.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('shot_update', { shot: makeShot('t1', { shot_number: 7 }) });
+    await flushPendingWrites();
+
+    expect(useSessionStore.getState().shots).toHaveLength(1);
+    expect(mockSaveShot).toHaveBeenCalledTimes(1);
+  });
+
+  it('still shows the enriched shot when writing the update fails', async () => {
+    mockSaveShot.mockRejectedValueOnce(new Error('disk full'));
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('shot_update', { shot: makeShot('t1', { shot_number: 7, spin_rpm: 2680 }) });
+    await flushPendingWrites();
+
+    expect(useSessionStore.getState().shots[0].spin_rpm).toBe(2680);
   });
 });
