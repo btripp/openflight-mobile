@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen } from '@testing-library/react-native';
 import LiveScreen from '../app/(tabs)/index';
 import { useSessionStore } from '../stores/useSessionStore';
 import type { Shot } from '../types';
@@ -17,6 +17,11 @@ jest.mock(
   'react-native-safe-area-context',
   () => require('react-native-safe-area-context/jest/mock').default,
 );
+
+const mockPush = jest.fn();
+jest.mock('expo-router', () => ({
+  useRouter: () => ({ push: mockPush }),
+}));
 
 const shot: Shot = {
   shot_number: 1,
@@ -47,6 +52,7 @@ const shot: Shot = {
 describe.each(['dark', 'light'])('Live screen in %s mode', (scheme) => {
   beforeEach(() => {
     mockColorScheme = scheme;
+    mockPush.mockClear();
     useSessionStore.setState({ connectionState: 'disconnected', shots: [] });
   });
 
@@ -68,5 +74,38 @@ describe.each(['dark', 'light'])('Live screen in %s mode', (scheme) => {
     expect(screen.getByText('152.4')).toBeTruthy();
     expect(screen.getByText('241')).toBeTruthy();
     expect(screen.getByText('2,650')).toBeTruthy();
+  });
+});
+
+// The range is reachable from Live. It is the entry point to the feature the port exists
+// for, so losing it silently would be worse than it looks.
+describe('driving range entry point', () => {
+  beforeEach(() => {
+    mockColorScheme = 'dark';
+    mockPush.mockClear();
+    useSessionStore.setState({ connectionState: 'disconnected', shots: [] });
+  });
+
+  it('offers the range from the Live screen', async () => {
+    await render(<LiveScreen />);
+
+    expect(screen.getByLabelText('Open the driving range')).toBeTruthy();
+    expect(screen.getByText('Driving range')).toBeTruthy();
+  });
+
+  it('opens the range when it is tapped', async () => {
+    await render(<LiveScreen />);
+
+    fireEvent.press(screen.getByLabelText('Open the driving range'));
+
+    expect(mockPush).toHaveBeenCalledWith('/range');
+  });
+
+  it('offers the range even before a shot has arrived', async () => {
+    useSessionStore.setState({ connectionState: 'connected', shots: [] });
+
+    await render(<LiveScreen />);
+
+    expect(screen.getByLabelText('Open the driving range')).toBeTruthy();
   });
 });
