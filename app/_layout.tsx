@@ -15,6 +15,8 @@ export default function RootLayout() {
     <FontGate>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
+        {/* Pushed from Live. Headered so there is a back affordance; the tabs stay headerless. */}
+        <Stack.Screen name="range" options={{ headerShown: true, title: 'Driving range' }} />
       </Stack>
       <StatusBar style="auto" />
     </FontGate>
