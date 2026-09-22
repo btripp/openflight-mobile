@@ -60,11 +60,12 @@ describe.each(['dark', 'light'])('Live screen in %s mode', (scheme) => {
   });
 
   it('shows the latest shot once connected', async () => {
-    useSessionStore.setState({ connectionState: 'connected', shots: [shot] });
+    useSessionStore.setState({ connectionState: 'connected', shots: [shot], club: '7-iron' });
 
     await render(<LiveScreen />);
 
     expect(screen.getByText('Simulate Shot')).toBeTruthy();
+    expect(screen.getByLabelText('Club: 7 Iron. Change club')).toBeTruthy();
     expect(screen.getByText('152.4')).toBeTruthy();
     expect(screen.getByText('241')).toBeTruthy();
     expect(screen.getByText('2,650')).toBeTruthy();

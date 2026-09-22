@@ -21,6 +21,10 @@ interface SessionState {
   // every screen wants. The server sends them oldest-first, so `setShots`
   // inverts on the way in.
   shots: Shot[];
+  // The club the server is filing shots under, as last reported by it. Null
+  // until a connection reports one; never set from a local pick, because the
+  // server ignores a club it does not recognise without replying.
+  club: string | null;
 
   setConnectionState: (state: ConnectionState) => void;
   // Begin a new visit. Called once a connection is established, so every shot
@@ -37,12 +41,14 @@ interface SessionState {
   // instead, so an enriched shot is never silently dropped.
   replaceShot: (shot: Shot) => void;
   clearShots: () => void;
+  setClub: (club: string | null) => void;
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
   connectionState: 'disconnected',
   sessionId: null,
   shots: [],
+  club: null,
 
   setConnectionState: (state) => set({ connectionState: state }),
   // Date.now() alone collides when two connections land within the same
@@ -66,4 +72,5 @@ export const useSessionStore = create<SessionState>((set) => ({
       return { shots };
     }),
   clearShots: () => set({ shots: [] }),
+  setClub: (club) => set({ club }),
 }));

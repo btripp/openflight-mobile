@@ -5,6 +5,7 @@ import { saveServerUrl } from '../storage/connection';
 import { getShotRepository } from '../storage/db';
 import type {
   CameraStatusPayload,
+  ClubChangedPayload,
   DebugStatusPayload,
   DebugToggledPayload,
   PowerStatusPayload,
@@ -51,11 +52,13 @@ class SocketService {
       this.socket = null;
     }
 
-    // Device status describes the server that reported it. Switching servers
-    // must not leave another Pi's radar port and battery on screen until the
-    // new one answers.
+    // Device status and the selected club both describe the server that
+    // reported them. Switching servers must not leave another Pi's radar port,
+    // battery or club on screen; the new one restores its own club through
+    // session_state once connected.
     if (this.url !== null && this.url !== url) {
       useDeviceStore.getState().reset();
+      store.setClub(null);
     }
 
     store.setConnectionState('connecting');
@@ -76,15 +79,24 @@ class SocketService {
     this.socket = null;
     this.url = null;
     useSessionStore.getState().setConnectionState('disconnected');
-    // Only the deliberate disconnect forgets the device. A transient drop is
-    // handled by the 'disconnect' event below, which leaves the last reading
-    // in place: blanking the radar and battery every time the wifi hiccups
-    // would read as hardware failing rather than a wobbly link.
+    // Only the deliberate disconnect forgets the device and the club. A
+    // transient drop is handled by the 'disconnect' event below, which leaves
+    // both in place: blanking the radar and battery every time the wifi
+    // hiccups would read as hardware failing rather than a wobbly link, and
+    // reconnecting restores the same server's club.
     useDeviceStore.getState().reset();
+    useSessionStore.getState().setClub(null);
   }
 
   simulateShot(): void {
     this.socket?.emit('simulate_shot');
+  }
+
+  // Fire-and-forget: the server confirms with a `club_changed` broadcast, which
+  // is what updates the store. It ignores an unknown club without replying, so
+  // nothing is changed locally ahead of that confirmation.
+  setClub(club: string): void {
+    this.emitWhileConnected('set_club', { club });
   }
 
   // --- Device controls ---
@@ -107,13 +119,10 @@ class SocketService {
   }
 
   // Socket.IO keeps the socket through a transient drop and buffers anything
-  // emitted meanwhile, replaying it on reconnect. A toggle tapped while the
-  // wifi was away would then land later and flip recording or the camera
-  // behind the user's back, so a change is sent only over a live connection.
-  //
-  // Named to match the identical helper on the club-selection branch: both
-  // features need exactly this guard, and whichever merges second should
-  // delete its copy rather than keep two.
+  // emitted meanwhile, replaying it on reconnect. A change made before the drop
+  // could then land after the user moved on -- filing later shots under a club
+  // picked earlier, or flipping recording behind the user's back -- so a change
+  // is sent only over a live connection.
   private emitWhileConnected(event: string, payload?: object): void {
     if (!this.socket?.connected) return;
     if (payload === undefined) this.socket.emit(event);
@@ -173,6 +182,14 @@ class SocketService {
 
     socket.on('session_state', (data: SessionStatePayload) => {
       store().setShots(data.shots);
+      // Older servers omit the club; keep what is shown rather than blank it.
+      if (typeof data.club === 'string') store().setClub(data.club);
+    });
+
+    // Broadcast to every client after a set_club — this phone's or another's,
+    // such as the kiosk or a connected simulator.
+    socket.on('club_changed', (data: ClubChangedPayload | null) => {
+      if (typeof data?.club === 'string') store().setClub(data.club);
     });
 
     socket.on('shot', (data: ShotEnvelope) => {
