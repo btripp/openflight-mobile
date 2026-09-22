@@ -60,8 +60,8 @@ describe('requestShutdown', () => {
   it('gives up rather than hanging on a Pi that never answers', async () => {
     // A Pi that is already off the network accepts the connection and then
     // says nothing. Without a bound, the screen sits on a spinner forever and
-    // the user cannot tell whether it is safe to pull the power -- which is
-    // not an observable end state.
+    // the user cannot tell whether the server stopped -- which is not an
+    // observable end state.
     //
     // Fake timers both prove the abort actually fires at the deadline and
     // stop the real 10s timer outliving the test.
@@ -125,8 +125,8 @@ describe('requestShutdown', () => {
   });
 
   it('resolves when the server accepts the request', async () => {
-    // The server answers 200 and only then halts, so a resolved promise means
-    // "accepted", not "already off".
+    // The server answers 200 and only then exits, so a resolved promise means
+    // "accepted", not "already stopped".
     mockFetch(ok());
 
     await expect(requestShutdown('http://192.168.1.100:8080')).resolves.toBeUndefined();

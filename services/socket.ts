@@ -87,6 +87,14 @@ class SocketService {
     useSessionStore.getState().setClub(null);
   }
 
+  // The address the current socket was opened against, or null after a
+  // deliberate disconnect. Anything addressed to "this Pi" outside the socket
+  // must use this rather than the saved URL, which is written asynchronously,
+  // may fail to save, and can still name the previous server after a switch.
+  currentUrl(): string | null {
+    return this.url;
+  }
+
   simulateShot(): void {
     this.socket?.emit('simulate_shot');
   }

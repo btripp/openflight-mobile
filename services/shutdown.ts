@@ -1,9 +1,13 @@
-// Graceful shutdown over HTTP.
+// Stopping the OpenFlight server over HTTP.
+//
+// Despite the route's name, this stops the server process only: the server
+// cleans up its hardware and exits, and the Pi's operating system keeps
+// running. It is not a safe point to remove power.
 //
 // This is the one server action the phone takes outside the socket. The kiosk
 // posts to a relative '/api/shutdown' because the Pi serves it (see
 // ui/src/hooks/useSocket.ts); a phone has to address the Pi explicitly, so the
-// server URL the user connected to is turned into an absolute endpoint here.
+// URL of the live connection is turned into an absolute endpoint here.
 //
 // Deliberately not on the socket: `shutdown` exists as a socket event too, but
 // the web UI uses the REST route, so both clients exercise the same server
@@ -13,7 +17,7 @@ const SHUTDOWN_PATH = '/api/shutdown';
 
 // A Pi that has already left the network accepts the connection and then says
 // nothing. Without a bound the screen sits on a spinner indefinitely, which
-// leaves the user unable to tell whether it is safe to cut the power -- not an
+// leaves the user unable to tell whether the server stopped -- not an
 // observable end state. Generous enough for a busy Pi on a weak LAN link.
 const TIMEOUT_MS = 10_000;
 
@@ -21,12 +25,12 @@ const TIMEOUT_MS = 10_000;
 // Native polyfills AbortController/AbortSignal from abort-controller v3
 // (react-native/Libraries/Core/setUpXHR.js), which has no static timeout()
 // helper. Calling it threw while building the fetch options -- before any
-// request left the phone -- so every shutdown reported failure on device while
+// request left the phone -- so every stop reported failure on device while
 // the tests passed on Node, which does have it.
 
-// The server answers 200 and only then halts, on a short delay
+// The server answers 200 and only then exits, on a short delay
 // (_shutdown_process_after_delay in server.py). Resolving therefore means the
-// Pi accepted the request, not that it has finished stopping.
+// server accepted the request, not that it has finished stopping.
 export async function requestShutdown(serverUrl: string): Promise<void> {
   // The address comes from a text field, so a trailing slash is entirely
   // normal and must not produce '//api/shutdown'.
@@ -41,10 +45,8 @@ export async function requestShutdown(serverUrl: string): Promise<void> {
       signal: controller.signal,
     });
 
-    // Anything but a success means the Pi is still running. Saying otherwise
-    // would invite someone to pull the power on a live SD card, which is the
-    // exact failure this feature exists to prevent -- so this throws rather
-    // than degrading quietly, and the caller surfaces it.
+    // Anything but a success means the server is still running. This throws
+    // rather than degrading quietly, and the caller surfaces it.
     if (!response.ok) {
       throw new Error(`Shutdown request failed (${response.status})`);
     }

@@ -549,6 +549,38 @@ describe('device status', () => {
   });
 });
 
+describe('the active server address', () => {
+  it('names the server most recently connected to, not an earlier one', () => {
+    // Stopping OpenFlight is addressed over HTTP, outside the socket, so it
+    // needs the address this socket is actually talking to.
+    socketService.connect('http://pi-a:8080');
+    trigger('connect');
+
+    socketService.connect('http://pi-b:8080');
+    trigger('connect');
+
+    expect(socketService.currentUrl()).toBe('http://pi-b:8080');
+  });
+
+  it('keeps the address through a transient drop', () => {
+    socketService.connect('http://pi-a:8080');
+    trigger('connect');
+
+    trigger('disconnect');
+
+    expect(socketService.currentUrl()).toBe('http://pi-a:8080');
+  });
+
+  it('has no address after a deliberate disconnect', () => {
+    socketService.connect('http://pi-a:8080');
+    trigger('connect');
+
+    socketService.disconnect();
+
+    expect(socketService.currentUrl()).toBeNull();
+  });
+});
+
 describe('the selected club', () => {
   it('takes the club the server restores on connect', () => {
     socketService.connect('http://host:8080');

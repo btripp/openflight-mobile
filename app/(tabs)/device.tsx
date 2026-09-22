@@ -13,13 +13,12 @@ import { radius, spacing, type Palette } from '../../components/theme/tokens';
 import { useThemedStyles } from '../../components/theme/useTheme';
 import { requestShutdown } from '../../services/shutdown';
 import { socketService } from '../../services/socket';
-import { loadServerUrl } from '../../storage/connection';
 import { useDeviceStore } from '../../stores/useDeviceStore';
 import { useSessionStore } from '../../stores/useSessionStore';
 import type { PowerStatusPayload, TriggerStatusPayload } from '../../types';
 
 // The troubleshooting lifeline for a Pi with no screen attached: what the
-// hardware is doing, and the only safe way to stop it. Every value is shown as
+// hardware is doing, and a clean way to stop OpenFlight. Every value is shown as
 // the server states it -- an absent measurement reads as an em dash, never as
 // a zero, matching the Shots screen.
 
@@ -156,31 +155,39 @@ function DebugCard({ enabled, logPath }: { enabled: boolean; logPath: string | n
 
 type ShutdownPhase = 'idle' | 'confirming' | 'pending' | 'done' | 'failed';
 
+// POST /api/shutdown stops the OpenFlight server process, not the Pi: the
+// server cleans up its hardware and exits (_shutdown_process_after_delay in
+// server.py) while the operating system keeps running. Everything here is
+// worded as stopping OpenFlight so nobody reads it as safe to pull the power.
+//
 // Once a request has actually been sent, what happened to it outlives the
-// connection: a successful shutdown takes the socket down with it ~0.5s after
-// the server answers (_shutdown_process_after_delay in server.py), and a
-// refused one leaves a Pi running that must not have its power pulled. Either
-// way the message has to survive the drop that follows.
+// connection: a successful stop takes the socket down with it ~0.5s after the
+// server answers, and a refused one leaves OpenFlight running. Either way the
+// message has to survive the drop that follows.
 const INITIATED: ShutdownPhase[] = ['pending', 'done', 'failed'];
 
 function ShutdownSection({ isConnected }: { isConnected: boolean }) {
   const styles = useThemedStyles(createStyles);
   const [phase, setPhase] = useState<ShutdownPhase>('idle');
+  // The server the user confirmed stopping. A retry goes back to it rather than
+  // to whatever is current: switching servers replaces the address before the
+  // new one connects, and a stale "Try again" must not stop a Pi nobody
+  // confirmed.
+  const [target, setTarget] = useState<string | null>(null);
 
-  // The address is read only when it is needed, so this screen never races the
-  // connection bar for it on mount.
-  //
   // Declared before any early return: every hook in this component has to run
   // on every render, and hiding the section below used to skip this one, which
-  // crashed React the first time the wifi dropped with nothing being shut down.
-  const send = useCallback(async () => {
+  // crashed React the first time the wifi dropped with nothing being stopped.
+  const send = useCallback(async (url: string | null) => {
+    setTarget(url);
     setPhase('pending');
     try {
-      await requestShutdown(await loadServerUrl());
+      if (url === null) throw new Error('No server to stop');
+      await requestShutdown(url);
       setPhase('done');
     } catch {
-      // Saying the Pi stopped when it did not would invite someone to pull the
-      // power on a live SD card, which is what this screen exists to prevent.
+      // Saying OpenFlight stopped when it did not would leave the user
+      // believing the server is down while it is still running.
       setPhase('failed');
     }
   }, []);
@@ -194,7 +201,7 @@ function ShutdownSection({ isConnected }: { isConnected: boolean }) {
     return (
       <View style={styles.card}>
         <ActivityIndicator />
-        <Text style={styles.note}>Shutting down…</Text>
+        <Text style={styles.note}>Stopping OpenFlight…</Text>
       </View>
     );
   }
@@ -202,11 +209,11 @@ function ShutdownSection({ isConnected }: { isConnected: boolean }) {
   if (phase === 'done') {
     return (
       <View style={styles.card}>
-        {/* The server answers before it halts, so this reports an accepted
-            request rather than a Pi that has finished stopping. */}
-        <Text style={styles.cardTitle}>Shutting down</Text>
+        {/* The server answers before it exits, so this reports an accepted
+            request rather than a server that has finished stopping. */}
+        <Text style={styles.cardTitle}>Stopping OpenFlight</Text>
         <Text style={styles.note}>
-          The Pi accepted the request. Wait for its lights to settle before cutting power.
+          The server accepted the request and is exiting. The Pi itself stays on.
         </Text>
       </View>
     );
@@ -215,13 +222,13 @@ function ShutdownSection({ isConnected }: { isConnected: boolean }) {
   if (phase === 'failed') {
     return (
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Could not shut down</Text>
-        <Text style={styles.note}>The Pi is still running. Do not pull its power.</Text>
+        <Text style={styles.cardTitle}>Could not stop OpenFlight</Text>
+        <Text style={styles.note}>The server is still running.</Text>
         <TouchableOpacity
           style={styles.dangerButton}
-          onPress={() => void send()}
+          onPress={() => void send(target)}
           accessibilityRole="button"
-          accessibilityLabel="Retry shutdown"
+          accessibilityLabel="Retry stopping OpenFlight"
         >
           <Text style={styles.dangerButtonText}>Try again</Text>
         </TouchableOpacity>
@@ -232,24 +239,27 @@ function ShutdownSection({ isConnected }: { isConnected: boolean }) {
   if (phase === 'confirming') {
     return (
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Shut down the Pi</Text>
+        <Text style={styles.cardTitle}>Stop the OpenFlight server?</Text>
         <Text style={styles.note}>
-          This stops the server. The current session is not kept on the Pi.
+          This exits the OpenFlight server. The Pi itself stays on, and the current session is not
+          kept on it.
         </Text>
         <View style={styles.confirmRow}>
           <TouchableOpacity
             style={styles.dangerButton}
-            onPress={() => void send()}
+            // The address of the live connection, captured now so a retry
+            // cannot drift to a server the user switched to afterwards.
+            onPress={() => void send(socketService.currentUrl())}
             accessibilityRole="button"
-            accessibilityLabel="Confirm shutdown"
+            accessibilityLabel="Confirm stopping OpenFlight"
           >
-            <Text style={styles.dangerButtonText}>Shut down now</Text>
+            <Text style={styles.dangerButtonText}>Stop now</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.cancelButton}
             onPress={() => setPhase('idle')}
             accessibilityRole="button"
-            accessibilityLabel="Cancel shutdown"
+            accessibilityLabel="Cancel stopping OpenFlight"
           >
             <Text style={styles.cancelButtonText}>Cancel</Text>
           </TouchableOpacity>
@@ -263,9 +273,9 @@ function ShutdownSection({ isConnected }: { isConnected: boolean }) {
       style={styles.shutdownTrigger}
       onPress={() => setPhase('confirming')}
       accessibilityRole="button"
-      accessibilityLabel="Shut down the Pi"
+      accessibilityLabel="Stop OpenFlight"
     >
-      <Text style={styles.shutdownTriggerText}>Shut down</Text>
+      <Text style={styles.shutdownTriggerText}>Stop OpenFlight</Text>
     </TouchableOpacity>
   );
 }
@@ -324,16 +334,15 @@ export default function DeviceScreen() {
           </View>
         )}
 
-        {/* Deliberately outside the connection branch: a shutdown that has
-            been sent takes the connection down with it, and its outcome is
-            what the user needs to read at exactly that moment. The section
-            renders nothing itself while idle and disconnected.
+        {/* Deliberately outside the connection branch: a stop that has been
+            sent takes the connection down with it, and its outcome is what the
+            user needs to read at exactly that moment. The section renders
+            nothing itself while idle and disconnected.
 
             Keyed on the session so a new connection remounts it, dropping an
-            outcome that described the previous one -- "wait for its lights to
-            settle" beside live status from a Pi that is plainly back, or a
-            stale "Try again" that would shut down whichever Pi is connected
-            now. A transient drop keeps the same session, so a request still in
+            outcome that described the previous one -- "exiting" beside live
+            status from a server that is plainly back, or a stale "Try again".
+            A transient drop keeps the same session, so a request still in
             flight is left alone. */}
         <ShutdownSection key={sessionId ?? 'no-session'} isConnected={isConnected} />
       </ScrollView>

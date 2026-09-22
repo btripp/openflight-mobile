@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import DeviceScreen from '../app/(tabs)/device';
 import { requestShutdown } from '../services/shutdown';
 import { socketService } from '../services/socket';
+import { saveServerUrl } from '../storage/connection';
 import { useDeviceStore } from '../stores/useDeviceStore';
 import { useSessionStore } from '../stores/useSessionStore';
 import type { ConnectionState, PowerStatusPayload, TriggerStatusPayload } from '../types';
@@ -28,6 +29,7 @@ const mockRequestShutdown = requestShutdown as jest.MockedFunction<typeof reques
 jest.mock('../services/socket', () => ({
   socketService: {
     toggleDebug: jest.fn(),
+    currentUrl: jest.fn(),
   },
 }));
 
@@ -84,12 +86,15 @@ async function renderDevice(
   await render(<DeviceScreen />);
 }
 
-const SHUT_DOWN = 'Shut down';
-const CONFIRM = 'Shut down the Pi';
+const SHUT_DOWN = 'Stop OpenFlight';
+const CONFIRM = 'Stop the OpenFlight server?';
+const PI_A = 'http://pi-a.local:8080';
+const PI_B = 'http://pi-b.local:8080';
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockRequestShutdown.mockResolvedValue(undefined);
+  mockedSocket.currentUrl.mockReturnValue(PI_A);
 });
 
 afterEach(() => {
@@ -254,10 +259,10 @@ describe('device controls', () => {
   });
 });
 
-describe('shutting the Pi down', () => {
-  it('never shuts down on a single tap', async () => {
-    // The whole point of this screen is to stop someone killing a live SD
-    // card, so the destructive action is always two deliberate steps.
+describe('stopping OpenFlight', () => {
+  it('never stops the server on a single tap', async () => {
+    // Stopping ends the session for everyone at the bay, so the destructive
+    // action is always two deliberate steps.
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
 
     await fireEvent.press(screen.getByText(SHUT_DOWN));
@@ -266,11 +271,11 @@ describe('shutting the Pi down', () => {
     expect(screen.getByText(CONFIRM)).toBeTruthy();
   });
 
-  it('shuts down once confirmed', async () => {
+  it('stops the server once confirmed', async () => {
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
     await fireEvent.press(screen.getByText(SHUT_DOWN));
 
-    await fireEvent.press(screen.getByLabelText('Confirm shutdown'));
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
 
     expect(mockRequestShutdown).toHaveBeenCalledTimes(1);
   });
@@ -279,43 +284,95 @@ describe('shutting the Pi down', () => {
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
     await fireEvent.press(screen.getByText(SHUT_DOWN));
 
-    await fireEvent.press(screen.getByLabelText('Cancel shutdown'));
+    await fireEvent.press(screen.getByLabelText('Cancel stopping OpenFlight'));
 
     expect(mockRequestShutdown).not.toHaveBeenCalled();
     expect(screen.queryByText(CONFIRM)).toBeNull();
   });
 
-  it('says the Pi is stopping once the request is accepted', async () => {
-    // The server answers 200 and only then halts, so this reports an accepted
-    // request -- not a Pi that has finished stopping.
+  it('says the server is exiting once the request is accepted', async () => {
+    // The server answers 200 and only then exits, so this reports an accepted
+    // request -- not a server that has finished stopping.
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
     await fireEvent.press(screen.getByText(SHUT_DOWN));
 
-    await fireEvent.press(screen.getByLabelText('Confirm shutdown'));
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
 
-    await waitFor(() => expect(screen.getByText(/shutting down/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/is exiting/i)).toBeTruthy());
   });
 
-  it('says so when the Pi refuses, instead of implying it stopped', async () => {
-    // Reporting success here would invite someone to pull the power on a Pi
-    // that is still writing to its SD card.
+  it('never presents stopping OpenFlight as a safe point to cut power', async () => {
+    // Regression: /api/shutdown exits the server process and leaves the OS
+    // running, but the screen said to "wait for its lights to settle before
+    // cutting power" -- inviting exactly the power pull on a live SD card this
+    // feature was meant to prevent.
+    await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
+    await fireEvent.press(screen.getByText(SHUT_DOWN));
+    expect(screen.queryByText(/power/i)).toBeNull();
+
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
+    await waitFor(() => expect(screen.getByText(/is exiting/i)).toBeTruthy());
+
+    expect(screen.getByText(/pi itself stays on/i)).toBeTruthy();
+    expect(screen.queryByText(/power/i)).toBeNull();
+  });
+
+  it('stops the server this phone is connected to, not the last one saved', async () => {
+    // Regression: the address was reloaded from storage at confirmation time.
+    // Saving the connected URL is asynchronous and allowed to fail, so after
+    // switching from Pi A to Pi B storage could still name A -- and A would be
+    // stopped while the user was looking at B.
+    await saveServerUrl(PI_A);
+    mockedSocket.currentUrl.mockReturnValue(PI_B);
+    await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
+    await fireEvent.press(screen.getByText(SHUT_DOWN));
+
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
+
+    expect(mockRequestShutdown).toHaveBeenCalledWith(PI_B);
+    expect(mockRequestShutdown).not.toHaveBeenCalledWith(PI_A);
+  });
+
+  it('retries against the server the user confirmed, even mid-switch', async () => {
+    // Switching servers replaces the address before the new one connects, and
+    // the failure card stays up until it does. A retry that re-read the
+    // current address would stop Pi B, which nobody confirmed stopping.
+    mockRequestShutdown.mockRejectedValueOnce(new Error('Shutdown request failed (500)'));
+    await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
+    await fireEvent.press(screen.getByText(SHUT_DOWN));
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
+    await waitFor(() => expect(screen.getByText(/could not stop openflight/i)).toBeTruthy());
+
+    mockedSocket.currentUrl.mockReturnValue(PI_B);
+    await act(async () => {
+      useSessionStore.setState({ connectionState: 'connecting' });
+    });
+    await fireEvent.press(screen.getByLabelText('Retry stopping OpenFlight'));
+
+    expect(mockRequestShutdown).toHaveBeenLastCalledWith(PI_A);
+    expect(mockRequestShutdown).not.toHaveBeenCalledWith(PI_B);
+  });
+
+  it('says so when the server refuses, instead of implying it stopped', async () => {
+    // Reporting success here would leave the user believing the server is
+    // down while it is still running.
     mockRequestShutdown.mockRejectedValueOnce(new Error('Shutdown request failed (500)'));
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
     await fireEvent.press(screen.getByText(SHUT_DOWN));
 
-    await fireEvent.press(screen.getByLabelText('Confirm shutdown'));
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
 
-    await waitFor(() => expect(screen.getByText(/could not shut down/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/could not stop openflight/i)).toBeTruthy());
   });
 
   it('offers a retry after a failure', async () => {
     mockRequestShutdown.mockRejectedValueOnce(new Error('Network request failed'));
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
     await fireEvent.press(screen.getByText(SHUT_DOWN));
-    await fireEvent.press(screen.getByLabelText('Confirm shutdown'));
-    await waitFor(() => expect(screen.getByText(/could not shut down/i)).toBeTruthy());
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
+    await waitFor(() => expect(screen.getByText(/could not stop openflight/i)).toBeTruthy());
 
-    await fireEvent.press(screen.getByLabelText('Retry shutdown'));
+    await fireEvent.press(screen.getByLabelText('Retry stopping OpenFlight'));
 
     expect(mockRequestShutdown).toHaveBeenCalledTimes(2);
   });
@@ -340,10 +397,10 @@ describe('shutting the Pi down', () => {
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
     await fireEvent.press(screen.getByText(SHUT_DOWN));
 
-    await fireEvent.press(screen.getByLabelText('Confirm shutdown'));
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
 
-    expect(screen.queryByLabelText('Confirm shutdown')).toBeNull();
-    expect(screen.getByText(/shutting down/i)).toBeTruthy();
+    expect(screen.queryByLabelText('Confirm stopping OpenFlight')).toBeNull();
+    expect(screen.getByText(/stopping openflight/i)).toBeTruthy();
     expect(mockRequestShutdown).toHaveBeenCalledTimes(1);
 
     // Let the request settle so the pending promise does not outlive the test.
@@ -352,24 +409,23 @@ describe('shutting the Pi down', () => {
     });
   });
 
-  it('keeps telling the user not to pull power after the Pi drops the socket', async () => {
-    // Regression: the server answers /api/shutdown and only then halts, so the
+  it('keeps the outcome on screen after the server drops the socket', async () => {
+    // Regression: the server answers /api/shutdown and only then exits, so the
     // socket drops a moment after success. The screen gated everything on the
-    // connection, so the "wait for its lights to settle" line -- the one
-    // instruction that prevents a corrupted SD card -- was unmounted before it
-    // could be read, leaving the generic "not connected" message instead.
+    // connection, so the outcome was unmounted before it could be read,
+    // leaving the generic "not connected" message instead.
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
     await fireEvent.press(screen.getByText(SHUT_DOWN));
-    await fireEvent.press(screen.getByLabelText('Confirm shutdown'));
-    await waitFor(() => expect(screen.getByText(/shutting down/i)).toBeTruthy());
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
+    await waitFor(() => expect(screen.getByText(/stopping openflight/i)).toBeTruthy());
 
-    // The Pi goes down, exactly as a successful shutdown requires.
+    // The server exits, exactly as a successful stop requires.
     await act(async () => {
       useSessionStore.setState({ connectionState: 'disconnected' });
     });
 
-    expect(screen.getByText(/shutting down/i)).toBeTruthy();
-    expect(screen.getByText(/before cutting power/i)).toBeTruthy();
+    expect(screen.getByText(/stopping openflight/i)).toBeTruthy();
+    expect(screen.getByText(/is exiting/i)).toBeTruthy();
   });
 
   it('keeps the in-flight state when the connection drops mid-request', async () => {
@@ -384,13 +440,13 @@ describe('shutting the Pi down', () => {
     );
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
     await fireEvent.press(screen.getByText(SHUT_DOWN));
-    await fireEvent.press(screen.getByLabelText('Confirm shutdown'));
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
 
     await act(async () => {
       useSessionStore.setState({ connectionState: 'disconnected' });
     });
 
-    expect(screen.getByText(/shutting down/i)).toBeTruthy();
+    expect(screen.getByText(/stopping openflight/i)).toBeTruthy();
     expect(screen.queryByText(SHUT_DOWN)).toBeNull();
 
     await act(async () => {
@@ -399,19 +455,19 @@ describe('shutting the Pi down', () => {
   });
 
   it('still reports a failure after the connection drops', async () => {
-    // A refused shutdown leaves the Pi running. If the socket also drops, the
-    // warning must survive -- this is the case where pulling power is worst.
+    // A refused stop leaves OpenFlight running. If the socket also drops, the
+    // failure must survive rather than read as a server that went away.
     mockRequestShutdown.mockRejectedValueOnce(new Error('Shutdown request failed (500)'));
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
     await fireEvent.press(screen.getByText(SHUT_DOWN));
-    await fireEvent.press(screen.getByLabelText('Confirm shutdown'));
-    await waitFor(() => expect(screen.getByText(/could not shut down/i)).toBeTruthy());
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
+    await waitFor(() => expect(screen.getByText(/could not stop openflight/i)).toBeTruthy());
 
     await act(async () => {
       useSessionStore.setState({ connectionState: 'disconnected' });
     });
 
-    expect(screen.getByText(/could not shut down/i)).toBeTruthy();
+    expect(screen.getByText(/could not stop openflight/i)).toBeTruthy();
   });
 
   it('survives the connection dropping while nothing is being shut down', async () => {
@@ -435,12 +491,12 @@ describe('shutting the Pi down', () => {
 
   it('clears a finished shutdown once a Pi is answering again', async () => {
     // Regression: the outcome is kept so it survives the drop a successful
-    // shutdown causes -- but once a Pi is answering again, "wait for its
-    // lights to settle" sits next to live status proving it is already back.
+    // stop causes -- but once a server is answering again, "is exiting" sits
+    // next to live status proving it is already back.
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
     await fireEvent.press(screen.getByText(SHUT_DOWN));
-    await fireEvent.press(screen.getByLabelText('Confirm shutdown'));
-    await waitFor(() => expect(screen.getByText(/before cutting power/i)).toBeTruthy());
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
+    await waitFor(() => expect(screen.getByText(/is exiting/i)).toBeTruthy());
     await act(async () => {
       useSessionStore.setState({ connectionState: 'disconnected' });
     });
@@ -450,20 +506,20 @@ describe('shutting the Pi down', () => {
       useSessionStore.setState({ connectionState: 'connected', sessionId: 'session-2' });
     });
 
-    expect(screen.queryByText(/before cutting power/i)).toBeNull();
+    expect(screen.queryByText(/is exiting/i)).toBeNull();
     expect(screen.getByText(SHUT_DOWN)).toBeTruthy();
   });
 
   it('never carries a failed shutdown over to the next Pi', async () => {
     // Regression: "Try again" on a stale failure called straight through to
-    // requestShutdown, which resolves the address from storage -- the server
-    // connected *now*, not the one that failed. That fires a real shutdown at
-    // a different Pi with no confirmation step at all.
+    // requestShutdown with whatever address was current -- the server
+    // connected *now*, not the one that failed. That stops a different Pi
+    // with no confirmation step at all.
     mockRequestShutdown.mockRejectedValueOnce(new Error('Shutdown request failed (500)'));
     await renderDevice('connected', { triggerStatus: makeTriggerStatus() });
     await fireEvent.press(screen.getByText(SHUT_DOWN));
-    await fireEvent.press(screen.getByLabelText('Confirm shutdown'));
-    await waitFor(() => expect(screen.getByText(/could not shut down/i)).toBeTruthy());
+    await fireEvent.press(screen.getByLabelText('Confirm stopping OpenFlight'));
+    await waitFor(() => expect(screen.getByText(/could not stop openflight/i)).toBeTruthy());
     await act(async () => {
       useSessionStore.setState({ connectionState: 'disconnected' });
     });
@@ -474,7 +530,7 @@ describe('shutting the Pi down', () => {
       useSessionStore.setState({ connectionState: 'connected', sessionId: 'session-2' });
     });
 
-    expect(screen.queryByLabelText('Retry shutdown')).toBeNull();
+    expect(screen.queryByLabelText('Retry stopping OpenFlight')).toBeNull();
     expect(mockRequestShutdown).not.toHaveBeenCalled();
   });
 
