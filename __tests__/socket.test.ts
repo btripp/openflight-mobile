@@ -11,14 +11,20 @@ jest.mock('socket.io-client', () => {
   const handlers: Record<string, (...args: unknown[]) => void> = {};
   const emit = jest.fn();
   const close = jest.fn();
+  // Mirrors Socket.IO's `socket.connected`; `trigger` flips it alongside the
+  // connect/disconnect events it fires.
+  const status = { connected: false };
   const io = jest.fn((_url: string, _opts?: unknown) => ({
     on: (event: string, cb: (...args: unknown[]) => void) => {
       handlers[event] = cb;
     },
     emit,
     close,
+    get connected() {
+      return status.connected;
+    },
   }));
-  return { io, __mock: { handlers, emit, close } };
+  return { io, __mock: { handlers, emit, close, status } };
 });
 
 jest.mock('@react-native-async-storage/async-storage', () =>
@@ -52,12 +58,20 @@ const socketMock = jest.requireMock('socket.io-client') as {
     handlers: Record<string, (...args: unknown[]) => void>;
     emit: jest.Mock;
     close: jest.Mock;
+    status: { connected: boolean };
   };
 };
 const { io: mockIo } = socketMock;
-const { emit: mockEmit, close: mockClose, handlers: mockHandlers } = socketMock.__mock;
+const {
+  emit: mockEmit,
+  close: mockClose,
+  handlers: mockHandlers,
+  status: mockStatus,
+} = socketMock.__mock;
 
 function trigger(event: string, ...args: unknown[]) {
+  if (event === 'connect') mockStatus.connected = true;
+  if (event === 'disconnect' || event === 'connect_error') mockStatus.connected = false;
   mockHandlers[event]?.(...args);
 }
 
@@ -89,8 +103,14 @@ function makeShot(timestamp: string, overrides: Partial<Shot> = {}): Shot {
 }
 
 beforeEach(() => {
-  useSessionStore.setState({ connectionState: 'disconnected', sessionId: null, shots: [] });
+  useSessionStore.setState({
+    connectionState: 'disconnected',
+    sessionId: null,
+    shots: [],
+    club: null,
+  });
   for (const key of Object.keys(mockHandlers)) delete mockHandlers[key];
+  mockStatus.connected = false;
   mockIo.mockClear();
   mockEmit.mockClear();
   mockClose.mockClear();
@@ -334,5 +354,120 @@ describe('a shot the server enriches after publishing it', () => {
     await flushPendingWrites();
 
     expect(useSessionStore.getState().shots[0].spin_rpm).toBe(2680);
+  });
+});
+
+describe('the selected club', () => {
+  it('takes the club the server restores on connect', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('session_state', { shots: [], club: '7-iron' });
+
+    expect(useSessionStore.getState().club).toBe('7-iron');
+  });
+
+  it('keeps the club when a session snapshot does not carry one', () => {
+    // An older server's session_state has no club key; that is not a reset.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('session_state', { shots: [], club: '7-iron' });
+
+    trigger('session_state', { shots: [] });
+
+    expect(useSessionStore.getState().club).toBe('7-iron');
+  });
+
+  it('follows a change made on another client', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('club_changed', { club: 'pw' });
+
+    expect(useSessionStore.getState().club).toBe('pw');
+  });
+
+  it('ignores a malformed club change', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('club_changed', { club: 'pw' });
+
+    trigger('club_changed', {});
+    trigger('club_changed', { club: 7 });
+    trigger('club_changed', null);
+
+    expect(useSessionStore.getState().club).toBe('pw');
+  });
+
+  it('asks the server to change club while connected', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    socketService.setClub('5-wood');
+
+    expect(mockEmit).toHaveBeenCalledWith('set_club', { club: '5-wood' });
+  });
+
+  it('waits for the server to confirm before showing the new club', () => {
+    // The server ignores a club it does not recognise without replying, so a
+    // local change would show a club that shots are not filed under.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('session_state', { shots: [], club: 'driver' });
+
+    socketService.setClub('5-wood');
+
+    expect(useSessionStore.getState().club).toBe('driver');
+  });
+
+  it('sends nothing before a connection is established', () => {
+    socketService.connect('http://host:8080');
+
+    socketService.setClub('5-wood');
+
+    expect(mockEmit).not.toHaveBeenCalledWith('set_club', expect.anything());
+  });
+
+  it('sends nothing during a transient drop, even once reconnected', () => {
+    // Socket.IO keeps the socket through a wifi drop and would buffer the emit
+    // for replay on reconnect, filing later shots under a club picked earlier.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('disconnect');
+
+    socketService.setClub('5-wood');
+    trigger('connect');
+
+    expect(mockEmit).not.toHaveBeenCalledWith('set_club', expect.anything());
+  });
+
+  it('keeps the club through a transient drop', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('club_changed', { club: 'pw' });
+
+    trigger('disconnect');
+
+    expect(useSessionStore.getState().club).toBe('pw');
+  });
+
+  it('forgets the club when the user disconnects deliberately', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('club_changed', { club: 'pw' });
+
+    socketService.disconnect();
+
+    expect(useSessionStore.getState().club).toBeNull();
+  });
+
+  it('forgets the club when switching to a different server', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('club_changed', { club: 'pw' });
+
+    socketService.connect('http://other:8080');
+
+    expect(useSessionStore.getState().club).toBeNull();
   });
 });
