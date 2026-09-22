@@ -2,7 +2,7 @@ import { io, type Socket } from 'socket.io-client';
 import { useSessionStore } from '../stores/useSessionStore';
 import { saveServerUrl } from '../storage/connection';
 import { getShotRepository } from '../storage/db';
-import type { SessionStatePayload, Shot, ShotEnvelope } from '../types';
+import type { ClubChangedPayload, SessionStatePayload, Shot, ShotEnvelope } from '../types';
 
 // Singleton Socket.IO client, mirroring the web app's socketService shape: one
 // place that maps every server event onto a store mutation. Kept out of the
@@ -41,6 +41,12 @@ class SocketService {
       this.socket = null;
     }
 
+    // The selected club belongs to the server that reported it; a different
+    // server restores its own through session_state once connected.
+    if (this.url !== null && this.url !== url) {
+      store.setClub(null);
+    }
+
     store.setConnectionState('connecting');
     this.url = url;
 
@@ -59,10 +65,28 @@ class SocketService {
     this.socket = null;
     this.url = null;
     useSessionStore.getState().setConnectionState('disconnected');
+    // Only the deliberate disconnect forgets the club; a transient drop keeps
+    // showing it, since reconnecting restores the same server's selection.
+    useSessionStore.getState().setClub(null);
   }
 
   simulateShot(): void {
     this.socket?.emit('simulate_shot');
+  }
+
+  // Fire-and-forget: the server confirms with a `club_changed` broadcast, which
+  // is what updates the store. It ignores an unknown club without replying, so
+  // nothing is changed locally ahead of that confirmation.
+  setClub(club: string): void {
+    this.emitWhileConnected('set_club', { club });
+  }
+
+  // Socket.IO keeps the socket through a transient drop and buffers anything
+  // emitted meanwhile, replaying it on reconnect. A selection made before the
+  // drop could then land after the user moved on and decide how the next
+  // shots are filed, so a selection is sent only over a live connection.
+  private emitWhileConnected(event: string, payload: object): void {
+    if (this.socket?.connected) this.socket.emit(event, payload);
   }
 
   // Files one shot under the current visit. Callers fire and forget, so this
@@ -108,6 +132,14 @@ class SocketService {
 
     socket.on('session_state', (data: SessionStatePayload) => {
       store().setShots(data.shots);
+      // Older servers omit the club; keep what is shown rather than blank it.
+      if (typeof data.club === 'string') store().setClub(data.club);
+    });
+
+    // Broadcast to every client after a set_club — this phone's or another's,
+    // such as the kiosk or a connected simulator.
+    socket.on('club_changed', (data: ClubChangedPayload | null) => {
+      if (typeof data?.club === 'string') store().setClub(data.club);
     });
 
     socket.on('shot', (data: ShotEnvelope) => {

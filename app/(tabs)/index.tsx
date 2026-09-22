@@ -1,6 +1,7 @@
 import { Keyboard, StyleSheet, TouchableWithoutFeedback, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSessionStore } from '../../stores/useSessionStore';
+import { ClubPicker } from '../../components/ClubPicker';
 import { ConnectionBar } from '../../components/ConnectionBar';
 import { CurrentShotView } from '../../components/CurrentShotView';
 import { spacing, type Palette } from '../../components/theme/tokens';
@@ -20,6 +21,7 @@ export default function LiveScreen() {
       <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <View style={styles.inner}>
           <ConnectionBar />
+          <ClubPicker />
           <CurrentShotView shot={latestShot} />
         </View>
       </TouchableWithoutFeedback>

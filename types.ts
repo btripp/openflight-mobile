@@ -63,6 +63,9 @@ export interface ShotEnvelope {
 // shots oldest-first; the store inverts this to its newest-first invariant.
 export interface SessionStatePayload {
   shots: Shot[];
+  // The club the server is attributing shots to, so a reconnecting client
+  // restores the selection instead of assuming one. Absent on older servers.
+  club?: string;
   mock_mode?: boolean;
   debug_mode?: boolean;
   player_name?: string;
