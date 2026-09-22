@@ -80,3 +80,74 @@ export interface ClubChangedPayload {
 export interface PlayerChangedPayload {
   player_name: string;
 }
+
+// --- Device status (mirrors src/openflight/server.py and power/models.py) ---
+// What the phone can learn about the hardware it is driving. On a headless Pi
+// this is the only window onto the radar and the battery, so every field is
+// reported as the server states it rather than smoothed into something tidier.
+
+// `trigger_status`, built by _get_trigger_status() in server.py. Requested with
+// `get_trigger_status`, pushed on connect, and pushed again after each shot.
+export interface TriggerStatusPayload {
+  mode: 'rolling-buffer' | 'mock' | 'swing-speed';
+  // The detector driving captures; null outside rolling-buffer mode.
+  trigger_type: string | null;
+  // The server reports this as `monitor is not None and not mock_mode`, so it
+  // is false in mock mode even though the mock is working perfectly. Read it
+  // alongside `mode` before calling a radar offline.
+  radar_connected: boolean;
+  radar_port: string | null;
+  triggers_total: number;
+  triggers_accepted: number;
+  triggers_rejected: number;
+}
+
+// PowerState in power/models.py. 'unavailable' is what a mains-powered Pi with
+// no battery provider reports -- an answer, not a missing reading.
+export type PowerState = 'plugged_in' | 'on_battery' | 'low' | 'critical' | 'unavailable';
+
+// --- Device controls (mirror src/openflight/server.py) ---
+// The server's entire runtime-mutable surface that works without a radar
+// attached. Radar tuning (`set_radar_config`) is deliberately not modelled: the
+// server refuses it in mock mode, so it cannot be exercised without hardware.
+
+// `debug_status`, from handle_get_debug_status (server.py:2547). Debug mode
+// writes a JSONL log on the Pi; the path is where it landed.
+export interface DebugStatusPayload {
+  enabled: boolean;
+  log_path: string | null;
+}
+
+// `debug_toggled`, from handle_toggle_debug (server.py:2530). The server sends
+// log_path only when enabling, and omits the key entirely when disabling.
+export interface DebugToggledPayload {
+  enabled: boolean;
+  log_path?: string;
+}
+
+// `camera_status`, from handle_toggle_camera / handle_toggle_camera_stream
+// (server.py:2011, :2035). A refusal -- streaming while the camera is off, or
+// a camera that never initialised -- arrives in this same envelope with
+// `error` set, not as a separate event.
+export interface CameraStatusPayload {
+  enabled: boolean;
+  available: boolean;
+  streaming?: boolean;
+  ball_detected?: boolean;
+  ball_confidence?: number;
+  error?: string;
+}
+
+// `power_status`, from PowerStatus.to_dict(). Every measurement is nullable
+// because a Pi without a battery HAT still reports its absence.
+export interface PowerStatusPayload {
+  available: boolean;
+  provider: string;
+  state: PowerState;
+  battery_percent: number | null;
+  battery_voltage_v: number | null;
+  external_power: boolean | null;
+  // ISO-8601 UTC.
+  updated_at: string;
+  error: string | null;
+}

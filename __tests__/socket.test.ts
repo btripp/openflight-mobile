@@ -1,4 +1,5 @@
 import { socketService } from '../services/socket';
+import { useDeviceStore } from '../stores/useDeviceStore';
 import { useSessionStore } from '../stores/useSessionStore';
 import type { Shot } from '../types';
 
@@ -11,14 +12,20 @@ jest.mock('socket.io-client', () => {
   const handlers: Record<string, (...args: unknown[]) => void> = {};
   const emit = jest.fn();
   const close = jest.fn();
+  // Mirrors Socket.IO's `socket.connected`; `trigger` flips it alongside the
+  // connect/disconnect events it fires.
+  const status = { connected: false };
   const io = jest.fn((_url: string, _opts?: unknown) => ({
     on: (event: string, cb: (...args: unknown[]) => void) => {
       handlers[event] = cb;
     },
     emit,
     close,
+    get connected() {
+      return status.connected;
+    },
   }));
-  return { io, __mock: { handlers, emit, close } };
+  return { io, __mock: { handlers, emit, close, status } };
 });
 
 jest.mock('@react-native-async-storage/async-storage', () =>
@@ -52,12 +59,20 @@ const socketMock = jest.requireMock('socket.io-client') as {
     handlers: Record<string, (...args: unknown[]) => void>;
     emit: jest.Mock;
     close: jest.Mock;
+    status: { connected: boolean };
   };
 };
 const { io: mockIo } = socketMock;
-const { emit: mockEmit, close: mockClose, handlers: mockHandlers } = socketMock.__mock;
+const {
+  emit: mockEmit,
+  close: mockClose,
+  handlers: mockHandlers,
+  status: mockStatus,
+} = socketMock.__mock;
 
 function trigger(event: string, ...args: unknown[]) {
+  if (event === 'connect') mockStatus.connected = true;
+  if (event === 'disconnect' || event === 'connect_error') mockStatus.connected = false;
   mockHandlers[event]?.(...args);
 }
 
@@ -90,7 +105,9 @@ function makeShot(timestamp: string, overrides: Partial<Shot> = {}): Shot {
 
 beforeEach(() => {
   useSessionStore.setState({ connectionState: 'disconnected', sessionId: null, shots: [] });
+  useDeviceStore.getState().reset();
   for (const key of Object.keys(mockHandlers)) delete mockHandlers[key];
+  mockStatus.connected = false;
   mockIo.mockClear();
   mockEmit.mockClear();
   mockClose.mockClear();
@@ -334,5 +351,223 @@ describe('a shot the server enriches after publishing it', () => {
     await flushPendingWrites();
 
     expect(useSessionStore.getState().shots[0].spin_rpm).toBe(2680);
+  });
+});
+
+// On a headless Pi this panel is the only window onto the radar and the
+// battery, so what it shows has to follow the connection honestly: present
+// while a server is answering, gone once it is not.
+describe('device status', () => {
+  const triggerStatus = {
+    mode: 'rolling-buffer',
+    trigger_type: 'audio',
+    radar_connected: true,
+    radar_port: '/dev/ttyUSB0',
+    triggers_total: 12,
+    triggers_accepted: 9,
+    triggers_rejected: 3,
+  };
+
+  const powerStatus = {
+    available: true,
+    provider: 'geekworm',
+    state: 'on_battery',
+    battery_percent: 78,
+    battery_voltage_v: 3.91,
+    external_power: false,
+    updated_at: '2026-09-22T05:30:00Z',
+    error: null,
+  };
+
+  it('asks for the trigger status once connected', () => {
+    // The server pushes it on connect, but a phone joining an already-running
+    // session cannot rely on having seen that push, so it asks as well.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    expect(mockEmit).toHaveBeenCalledWith('get_trigger_status');
+  });
+
+  it('asks again after reconnecting, since the hardware may have changed', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    mockEmit.mockClear();
+
+    trigger('disconnect');
+    trigger('connect');
+
+    expect(mockEmit).toHaveBeenCalledWith('get_trigger_status');
+  });
+
+  it('shows the trigger status the server reports', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('trigger_status', triggerStatus);
+
+    expect(useDeviceStore.getState().triggerStatus?.radar_port).toBe('/dev/ttyUSB0');
+    expect(useDeviceStore.getState().triggerLoaded).toBe(true);
+  });
+
+  it('shows the power status the server reports', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('power_status', powerStatus);
+
+    expect(useDeviceStore.getState().powerStatus?.battery_percent).toBe(78);
+    expect(useDeviceStore.getState().powerLoaded).toBe(true);
+  });
+
+  it('ignores a malformed status rather than blanking the panel', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('trigger_status', triggerStatus);
+    trigger('power_status', powerStatus);
+
+    trigger('trigger_status', null);
+    trigger('power_status', undefined);
+
+    expect(useDeviceStore.getState().triggerStatus?.mode).toBe('rolling-buffer');
+    expect(useDeviceStore.getState().powerStatus?.provider).toBe('geekworm');
+  });
+
+  it('keeps the last reading through a transient drop', () => {
+    // Socket.IO reconnects on its own. Blanking the radar and battery every
+    // time the wifi hiccups would read as hardware failing, not a wobbly link.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('trigger_status', triggerStatus);
+    trigger('power_status', powerStatus);
+
+    trigger('disconnect');
+
+    expect(useDeviceStore.getState().triggerStatus).not.toBeNull();
+    expect(useDeviceStore.getState().powerStatus).not.toBeNull();
+  });
+
+  it('forgets the device when the user disconnects deliberately', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('trigger_status', triggerStatus);
+    trigger('power_status', powerStatus);
+    // The panel has to be showing something first, or "it is empty afterwards"
+    // is true of a store nothing ever filled and proves nothing.
+    expect(useDeviceStore.getState().triggerStatus).not.toBeNull();
+    expect(useDeviceStore.getState().powerStatus).not.toBeNull();
+
+    socketService.disconnect();
+
+    const state = useDeviceStore.getState();
+    expect(state.triggerStatus).toBeNull();
+    expect(state.powerStatus).toBeNull();
+    expect(state.triggerLoaded).toBe(false);
+    expect(state.powerLoaded).toBe(false);
+  });
+
+  it('asks for the debug and camera state once connected', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    expect(mockEmit).toHaveBeenCalledWith('get_debug_status');
+    expect(mockEmit).toHaveBeenCalledWith('get_camera_status');
+  });
+
+  it('shows the debug recording state the server reports', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('debug_status', { enabled: true, log_path: '/home/pi/debug.jsonl' });
+
+    expect(useDeviceStore.getState().debugEnabled).toBe(true);
+    expect(useDeviceStore.getState().debugLogPath).toBe('/home/pi/debug.jsonl');
+  });
+
+  it('follows a debug toggle made on another client', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('debug_toggled', { enabled: true, log_path: '/home/pi/debug.jsonl' });
+
+    expect(useDeviceStore.getState().debugEnabled).toBe(true);
+  });
+
+  it('shows the camera state the server reports', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('camera_status', { enabled: true, available: true, streaming: true });
+
+    expect(useDeviceStore.getState().cameraStatus?.streaming).toBe(true);
+  });
+
+  it('asks the server to toggle debug recording while connected', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    mockEmit.mockClear();
+
+    socketService.toggleDebug();
+
+    expect(mockEmit).toHaveBeenCalledWith('toggle_debug');
+  });
+
+  it('asks the server to toggle the camera and its stream while connected', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    mockEmit.mockClear();
+
+    socketService.toggleCamera();
+    socketService.toggleCameraStream();
+
+    expect(mockEmit).toHaveBeenCalledWith('toggle_camera');
+    expect(mockEmit).toHaveBeenCalledWith('toggle_camera_stream');
+  });
+
+  it('sends no toggle during a transient drop, even once reconnected', () => {
+    // Socket.IO buffers anything emitted through a drop and replays it on
+    // reconnect, so a toggle tapped while the wifi was away would land later
+    // and flip recording or the camera behind the user's back.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('disconnect');
+    mockEmit.mockClear();
+
+    socketService.toggleDebug();
+    socketService.toggleCamera();
+    socketService.toggleCameraStream();
+    trigger('connect');
+
+    expect(mockEmit).not.toHaveBeenCalledWith('toggle_debug');
+    expect(mockEmit).not.toHaveBeenCalledWith('toggle_camera');
+    expect(mockEmit).not.toHaveBeenCalledWith('toggle_camera_stream');
+  });
+
+  it('forgets the debug and camera state on a deliberate disconnect', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('debug_status', { enabled: true, log_path: '/home/pi/debug.jsonl' });
+    trigger('camera_status', { enabled: true, available: true, streaming: true });
+    expect(useDeviceStore.getState().debugEnabled).toBe(true);
+
+    socketService.disconnect();
+
+    expect(useDeviceStore.getState().debugEnabled).toBe(false);
+    expect(useDeviceStore.getState().debugLogPath).toBeNull();
+    expect(useDeviceStore.getState().cameraStatus).toBeNull();
+  });
+
+  it('forgets the device when switching to a different server', () => {
+    // Another Pi's radar port and battery must not be read as this one's.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('trigger_status', triggerStatus);
+    trigger('power_status', powerStatus);
+    expect(useDeviceStore.getState().triggerStatus).not.toBeNull();
+    expect(useDeviceStore.getState().powerStatus).not.toBeNull();
+
+    socketService.connect('http://other:8080');
+
+    expect(useDeviceStore.getState().triggerStatus).toBeNull();
+    expect(useDeviceStore.getState().powerStatus).toBeNull();
   });
 });
