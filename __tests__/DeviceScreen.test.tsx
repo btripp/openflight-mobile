@@ -4,12 +4,7 @@ import { requestShutdown } from '../services/shutdown';
 import { socketService } from '../services/socket';
 import { useDeviceStore } from '../stores/useDeviceStore';
 import { useSessionStore } from '../stores/useSessionStore';
-import type {
-  CameraStatusPayload,
-  ConnectionState,
-  PowerStatusPayload,
-  TriggerStatusPayload,
-} from '../types';
+import type { ConnectionState, PowerStatusPayload, TriggerStatusPayload } from '../types';
 
 jest.mock(
   'react-native-safe-area-context',
@@ -33,8 +28,6 @@ const mockRequestShutdown = requestShutdown as jest.MockedFunction<typeof reques
 jest.mock('../services/socket', () => ({
   socketService: {
     toggleDebug: jest.fn(),
-    toggleCamera: jest.fn(),
-    toggleCameraStream: jest.fn(),
   },
 }));
 
@@ -75,7 +68,6 @@ async function renderDevice(
     triggerStatus?: TriggerStatusPayload | null;
     powerStatus?: PowerStatusPayload | null;
     debug?: { enabled: boolean; logPath?: string };
-    camera?: CameraStatusPayload;
   } = {},
 ) {
   // A session is one connection span; the socket service starts a new one on
@@ -89,7 +81,6 @@ async function renderDevice(
       .getState()
       .applyDebugStatus({ enabled: device.debug.enabled, log_path: device.debug.logPath ?? null });
   }
-  if (device.camera) useDeviceStore.getState().applyCameraStatus(device.camera);
   await render(<DeviceScreen />);
 }
 
@@ -221,38 +212,6 @@ describe('device controls', () => {
     expect(screen.getByLabelText('Start debug recording')).toBeTruthy();
   });
 
-  it('offers the camera and its stream', async () => {
-    await renderDevice('connected', {
-      triggerStatus: makeTriggerStatus(),
-      camera: { enabled: true, available: true, streaming: false },
-    });
-
-    await fireEvent.press(screen.getByLabelText('Start camera stream'));
-
-    expect(mockedSocket.toggleCameraStream).toHaveBeenCalledTimes(1);
-  });
-
-  it('shows what the server refused rather than swallowing it', async () => {
-    // Asking to stream with the camera off comes back in the camera_status
-    // envelope with an error; nothing else reports that the tap did nothing.
-    await renderDevice('connected', {
-      triggerStatus: makeTriggerStatus(),
-      camera: { enabled: false, available: true, streaming: false, error: 'Camera not enabled' },
-    });
-
-    expect(screen.getByText(/camera not enabled/i)).toBeTruthy();
-  });
-
-  it('says so when the Pi has no camera at all', async () => {
-    await renderDevice('connected', {
-      triggerStatus: makeTriggerStatus(),
-      camera: { enabled: false, available: false, streaming: false },
-    });
-
-    expect(screen.getByText(/no camera/i)).toBeTruthy();
-    expect(screen.queryByLabelText('Enable camera')).toBeNull();
-  });
-
   // The pair below is deliberately two tests rather than one that renders,
   // cleans up and renders again: a cleanup() inside a test body leaves
   // RNTL's container state inconsistent for whichever test runs next, which
@@ -292,7 +251,6 @@ describe('device controls', () => {
     await renderDevice('disconnected');
 
     expect(screen.queryByLabelText('Start debug recording')).toBeNull();
-    expect(screen.queryByLabelText('Enable camera')).toBeNull();
   });
 });
 

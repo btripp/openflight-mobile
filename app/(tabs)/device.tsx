@@ -16,7 +16,7 @@ import { socketService } from '../../services/socket';
 import { loadServerUrl } from '../../storage/connection';
 import { useDeviceStore } from '../../stores/useDeviceStore';
 import { useSessionStore } from '../../stores/useSessionStore';
-import type { CameraStatusPayload, PowerStatusPayload, TriggerStatusPayload } from '../../types';
+import type { PowerStatusPayload, TriggerStatusPayload } from '../../types';
 
 // The troubleshooting lifeline for a Pi with no screen attached: what the
 // hardware is doing, and the only safe way to stop it. Every value is shown as
@@ -154,42 +154,6 @@ function DebugCard({ enabled, logPath }: { enabled: boolean; logPath: string | n
   );
 }
 
-function CameraCard({ status }: { status: CameraStatusPayload }) {
-  const styles = useThemedStyles(createStyles);
-
-  if (!status.available) {
-    return (
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Camera</Text>
-        <Text style={styles.note}>No camera on this Pi.</Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.card}>
-      <Text style={styles.cardTitle}>Camera</Text>
-      <ControlRow
-        label="Camera"
-        action={status.enabled ? 'Disable' : 'Enable'}
-        accessibilityLabel={status.enabled ? 'Disable camera' : 'Enable camera'}
-        onPress={() => socketService.toggleCamera()}
-      />
-      {status.enabled ? (
-        <ControlRow
-          label="Live stream"
-          action={status.streaming ? 'Stop' : 'Start'}
-          accessibilityLabel={status.streaming ? 'Stop camera stream' : 'Start camera stream'}
-          onPress={() => socketService.toggleCameraStream()}
-        />
-      ) : null}
-      {/* A refusal arrives in the same envelope as the status; nothing else
-          would tell the user their tap did nothing. */}
-      {status.error ? <Text style={styles.controlError}>{status.error}</Text> : null}
-    </View>
-  );
-}
-
 type ShutdownPhase = 'idle' | 'confirming' | 'pending' | 'done' | 'failed';
 
 // Once a request has actually been sent, what happened to it outlives the
@@ -319,8 +283,6 @@ export default function DeviceScreen() {
   const debugEnabled = useDeviceStore((s) => s.debugEnabled);
   const debugLogPath = useDeviceStore((s) => s.debugLogPath);
   const debugLoaded = useDeviceStore((s) => s.debugLoaded);
-  const cameraStatus = useDeviceStore((s) => s.cameraStatus);
-  const cameraLoaded = useDeviceStore((s) => s.cameraLoaded);
 
   const isConnected = connectionState === 'connected';
 
@@ -352,8 +314,6 @@ export default function DeviceScreen() {
                 recording, and a Start that actually stops a capture is worse
                 than a card that appears a moment late. */}
             {debugLoaded ? <DebugCard enabled={debugEnabled} logPath={debugLogPath} /> : null}
-
-            {cameraLoaded && cameraStatus !== null ? <CameraCard status={cameraStatus} /> : null}
           </>
         ) : (
           <View style={styles.empty}>
@@ -455,12 +415,6 @@ const createStyles = (c: Palette) =>
       fontFamily: fontFamily.regular,
       color: c.textMuted,
       marginTop: 2,
-    },
-    controlError: {
-      fontSize: 12,
-      fontFamily: fontFamily.medium,
-      color: c.danger,
-      marginTop: spacing.xs,
     },
     controlButton: {
       minHeight: 44,

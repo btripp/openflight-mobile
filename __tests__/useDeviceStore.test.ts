@@ -136,30 +136,6 @@ describe('useDeviceStore', () => {
     expect(useDeviceStore.getState().debugLogPath).toBeNull();
   });
 
-  it('mirrors the camera the server reports', () => {
-    useDeviceStore
-      .getState()
-      .applyCameraStatus({ enabled: true, available: true, streaming: false });
-
-    const state = useDeviceStore.getState();
-    expect(state.cameraStatus?.enabled).toBe(true);
-    expect(state.cameraStatus?.streaming).toBe(false);
-    expect(state.cameraLoaded).toBe(true);
-  });
-
-  it('keeps a refusal the server sends rather than dropping it', () => {
-    // Asking to stream while the camera is off comes back in the same envelope
-    // with an error, and that is the only signal the request was refused.
-    useDeviceStore.getState().applyCameraStatus({
-      enabled: false,
-      available: true,
-      streaming: false,
-      error: 'Camera not enabled',
-    });
-
-    expect(useDeviceStore.getState().cameraStatus?.error).toBe('Camera not enabled');
-  });
-
   it('forgets a device once it is no longer the one being talked to', () => {
     // Status belongs to the server that reported it; another Pi's radar port
     // and battery must not linger as though they described the new one.

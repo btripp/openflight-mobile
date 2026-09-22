@@ -110,35 +110,23 @@ export interface TriggerStatusPayload {
 export type PowerState = 'plugged_in' | 'on_battery' | 'low' | 'critical' | 'unavailable';
 
 // --- Device controls (mirror src/openflight/server.py) ---
-// The server's entire runtime-mutable surface that works without a radar
-// attached. Radar tuning (`set_radar_config`) is deliberately not modelled: the
-// server refuses it in mock mode, so it cannot be exercised without hardware.
+// Only debug recording for now. Radar tuning (`set_radar_config`) is not
+// modelled: the server refuses it in mock mode, so it cannot be exercised
+// without hardware. Camera capture settings (`get_camera_capture_settings`)
+// are left for their own change.
 
-// `debug_status`, from handle_get_debug_status (server.py:2547). Debug mode
+// `debug_status`, from handle_get_debug_status in server.py. Debug mode
 // writes a JSONL log on the Pi; the path is where it landed.
 export interface DebugStatusPayload {
   enabled: boolean;
   log_path: string | null;
 }
 
-// `debug_toggled`, from handle_toggle_debug (server.py:2530). The server sends
+// `debug_toggled`, from handle_toggle_debug in server.py. The server sends
 // log_path only when enabling, and omits the key entirely when disabling.
 export interface DebugToggledPayload {
   enabled: boolean;
   log_path?: string;
-}
-
-// `camera_status`, from handle_toggle_camera / handle_toggle_camera_stream
-// (server.py:2011, :2035). A refusal -- streaming while the camera is off, or
-// a camera that never initialised -- arrives in this same envelope with
-// `error` set, not as a separate event.
-export interface CameraStatusPayload {
-  enabled: boolean;
-  available: boolean;
-  streaming?: boolean;
-  ball_detected?: boolean;
-  ball_confidence?: number;
-  error?: string;
 }
 
 // `power_status`, from PowerStatus.to_dict(). Every measurement is nullable

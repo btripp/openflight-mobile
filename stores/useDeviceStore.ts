@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import type {
-  CameraStatusPayload,
   DebugStatusPayload,
   DebugToggledPayload,
   PowerStatusPayload,
@@ -37,13 +36,10 @@ interface DeviceState {
   debugEnabled: boolean;
   debugLogPath: string | null;
   debugLoaded: boolean;
-  cameraStatus: CameraStatusPayload | null;
-  cameraLoaded: boolean;
 
   applyTriggerStatus: (status: TriggerStatusPayload) => void;
   applyPowerStatus: (status: PowerStatusPayload) => void;
   applyDebugStatus: (status: DebugStatusPayload | DebugToggledPayload) => void;
-  applyCameraStatus: (status: CameraStatusPayload) => void;
   // Drop back to the pre-connection state. Status belongs to the server that
   // reported it; another Pi's radar port must not linger as though it were
   // this one's.
@@ -58,8 +54,6 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   debugEnabled: false,
   debugLogPath: null,
   debugLoaded: false,
-  cameraStatus: null,
-  cameraLoaded: false,
 
   // Both appliers replace wholesale rather than merging: a snapshot is the
   // whole truth, and merging would strand a field from an older reading beside
@@ -88,11 +82,6 @@ export const useDeviceStore = create<DeviceState>((set) => ({
     });
   },
 
-  applyCameraStatus: (status) => {
-    if (!status || typeof status !== 'object') return;
-    set({ cameraStatus: status, cameraLoaded: true });
-  },
-
   reset: () =>
     set({
       triggerStatus: null,
@@ -102,7 +91,5 @@ export const useDeviceStore = create<DeviceState>((set) => ({
       debugEnabled: false,
       debugLogPath: null,
       debugLoaded: false,
-      cameraStatus: null,
-      cameraLoaded: false,
     }),
 }));

@@ -4,7 +4,6 @@ import { useSessionStore } from '../stores/useSessionStore';
 import { saveServerUrl } from '../storage/connection';
 import { getShotRepository } from '../storage/db';
 import type {
-  CameraStatusPayload,
   ClubChangedPayload,
   DebugStatusPayload,
   DebugToggledPayload,
@@ -99,23 +98,11 @@ class SocketService {
     this.emitWhileConnected('set_club', { club });
   }
 
-  // --- Device controls ---
-  // Each toggle is fire-and-forget: the server flips the state and broadcasts
-  // the result (`debug_toggled`, `camera_status`) to every client, so there is
-  // nothing to update optimistically and nothing to roll back. A refusal --
-  // streaming with the camera off, or a camera that never initialised --
-  // arrives in that same broadcast with an `error` set.
-
+  // Fire-and-forget: the server flips debug mode and broadcasts the result as
+  // `debug_toggled` to every client, so there is nothing to update
+  // optimistically and nothing to roll back.
   toggleDebug(): void {
     this.emitWhileConnected('toggle_debug');
-  }
-
-  toggleCamera(): void {
-    this.emitWhileConnected('toggle_camera');
-  }
-
-  toggleCameraStream(): void {
-    this.emitWhileConnected('toggle_camera_stream');
   }
 
   // Socket.IO keeps the socket through a transient drop and buffers anything
@@ -163,11 +150,9 @@ class SocketService {
       // and the hardware may have changed while it was away. Read-only, so it
       // needs no connected-only guard: a replayed request costs a snapshot.
       socket.emit('get_trigger_status');
-      // Same reasoning as the trigger status: these are pushed on connect by
-      // the server, but a phone joining a session already in progress cannot
-      // rely on having seen that push. All three are read-only requests.
+      // The server does not push debug mode on connect, and it is server-global,
+      // so a recording may already be running. Read-only, like the above.
       socket.emit('get_debug_status');
-      socket.emit('get_camera_status');
     });
 
     socket.on('disconnect', () => {
@@ -231,11 +216,6 @@ class SocketService {
 
     socket.on('debug_toggled', (data: DebugToggledPayload) => {
       useDeviceStore.getState().applyDebugStatus(data);
-    });
-
-    // Broadcast after every camera change, including one the server refused.
-    socket.on('camera_status', (data: CameraStatusPayload) => {
-      useDeviceStore.getState().applyCameraStatus(data);
     });
   }
 }

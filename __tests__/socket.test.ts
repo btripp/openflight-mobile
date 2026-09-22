@@ -470,12 +470,11 @@ describe('device status', () => {
     expect(state.powerLoaded).toBe(false);
   });
 
-  it('asks for the debug and camera state once connected', () => {
+  it('asks for the debug state once connected', () => {
     socketService.connect('http://host:8080');
     trigger('connect');
 
     expect(mockEmit).toHaveBeenCalledWith('get_debug_status');
-    expect(mockEmit).toHaveBeenCalledWith('get_camera_status');
   });
 
   it('shows the debug recording state the server reports', () => {
@@ -497,15 +496,6 @@ describe('device status', () => {
     expect(useDeviceStore.getState().debugEnabled).toBe(true);
   });
 
-  it('shows the camera state the server reports', () => {
-    socketService.connect('http://host:8080');
-    trigger('connect');
-
-    trigger('camera_status', { enabled: true, available: true, streaming: true });
-
-    expect(useDeviceStore.getState().cameraStatus?.streaming).toBe(true);
-  });
-
   it('asks the server to toggle debug recording while connected', () => {
     socketService.connect('http://host:8080');
     trigger('connect');
@@ -516,49 +506,31 @@ describe('device status', () => {
     expect(mockEmit).toHaveBeenCalledWith('toggle_debug');
   });
 
-  it('asks the server to toggle the camera and its stream while connected', () => {
-    socketService.connect('http://host:8080');
-    trigger('connect');
-    mockEmit.mockClear();
-
-    socketService.toggleCamera();
-    socketService.toggleCameraStream();
-
-    expect(mockEmit).toHaveBeenCalledWith('toggle_camera');
-    expect(mockEmit).toHaveBeenCalledWith('toggle_camera_stream');
-  });
-
   it('sends no toggle during a transient drop, even once reconnected', () => {
     // Socket.IO buffers anything emitted through a drop and replays it on
     // reconnect, so a toggle tapped while the wifi was away would land later
-    // and flip recording or the camera behind the user's back.
+    // and flip recording behind the user's back.
     socketService.connect('http://host:8080');
     trigger('connect');
     trigger('disconnect');
     mockEmit.mockClear();
 
     socketService.toggleDebug();
-    socketService.toggleCamera();
-    socketService.toggleCameraStream();
     trigger('connect');
 
     expect(mockEmit).not.toHaveBeenCalledWith('toggle_debug');
-    expect(mockEmit).not.toHaveBeenCalledWith('toggle_camera');
-    expect(mockEmit).not.toHaveBeenCalledWith('toggle_camera_stream');
   });
 
-  it('forgets the debug and camera state on a deliberate disconnect', () => {
+  it('forgets the debug state on a deliberate disconnect', () => {
     socketService.connect('http://host:8080');
     trigger('connect');
     trigger('debug_status', { enabled: true, log_path: '/home/pi/debug.jsonl' });
-    trigger('camera_status', { enabled: true, available: true, streaming: true });
     expect(useDeviceStore.getState().debugEnabled).toBe(true);
 
     socketService.disconnect();
 
     expect(useDeviceStore.getState().debugEnabled).toBe(false);
     expect(useDeviceStore.getState().debugLogPath).toBeNull();
-    expect(useDeviceStore.getState().cameraStatus).toBeNull();
   });
 
   it('forgets the device when switching to a different server', () => {
