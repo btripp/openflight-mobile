@@ -1,6 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
 import { useDeviceStore } from '../stores/useDeviceStore';
 import { useSessionStore } from '../stores/useSessionStore';
+import { useProfileStore } from '../stores/useProfileStore';
 import { saveServerUrl } from '../storage/connection';
 import { getShotRepository } from '../storage/db';
 import type {
@@ -8,6 +9,7 @@ import type {
   DebugStatusPayload,
   DebugToggledPayload,
   PowerStatusPayload,
+  ProfilesSnapshot,
   SessionStatePayload,
   Shot,
   ShotEnvelope,
@@ -51,12 +53,13 @@ class SocketService {
       this.socket = null;
     }
 
-    // Device status and the selected club both describe the server that
-    // reported them. Switching servers must not leave another Pi's radar port,
-    // battery or club on screen; the new one restores its own club through
-    // session_state once connected.
+    // Device status, the profile roster and the selected club all describe the
+    // server that reported them. Switching servers must not leave another Pi's
+    // radar port, battery, roster or club on screen; the new one sends its own
+    // once connected.
     if (this.url !== null && this.url !== url) {
       useDeviceStore.getState().reset();
+      useProfileStore.getState().reset();
       store.setClub(null);
     }
 
@@ -78,12 +81,13 @@ class SocketService {
     this.socket = null;
     this.url = null;
     useSessionStore.getState().setConnectionState('disconnected');
-    // Only the deliberate disconnect forgets the device and the club. A
-    // transient drop is handled by the 'disconnect' event below, which leaves
-    // both in place: blanking the radar and battery every time the wifi
+    // Only the deliberate disconnect forgets the device, the roster and the
+    // club. A transient drop is handled by the 'disconnect' event below, which
+    // leaves them in place: blanking the radar and battery every time the wifi
     // hiccups would read as hardware failing rather than a wobbly link, and
-    // reconnecting restores the same server's club.
+    // reconnecting restores the same server's roster and club.
     useDeviceStore.getState().reset();
+    useProfileStore.getState().reset();
     useSessionStore.getState().setClub(null);
   }
 
@@ -113,11 +117,33 @@ class SocketService {
     this.emitWhileConnected('toggle_debug');
   }
 
+  // --- Profiles ---
+  // Every mutation is fire-and-forget: the server answers each one with a full
+  // `profiles` snapshot, including when it refuses (it will not remove the
+  // active profile, one with shots, or the last one). There is nothing to
+  // update optimistically and nothing to roll back — the reply is the truth.
+
+  setActiveProfile(profileId: string): void {
+    this.emitWhileConnected('set_active_profile', { profile_id: profileId });
+  }
+
+  addProfile(name: string): void {
+    this.emitWhileConnected('add_profile', { name });
+  }
+
+  renameProfile(profileId: string, name: string): void {
+    this.emitWhileConnected('rename_profile', { profile_id: profileId, name });
+  }
+
+  removeProfile(profileId: string): void {
+    this.emitWhileConnected('remove_profile', { profile_id: profileId });
+  }
+
   // Socket.IO keeps the socket through a transient drop and buffers anything
   // emitted meanwhile, replaying it on reconnect. A change made before the drop
   // could then land after the user moved on -- filing later shots under a club
-  // picked earlier, or flipping recording behind the user's back -- so a change
-  // is sent only over a live connection.
+  // or profile picked earlier, or flipping recording behind the user's back --
+  // so a change is sent only over a live connection.
   private emitWhileConnected(event: string, payload?: object): void {
     if (!this.socket?.connected) return;
     if (payload === undefined) this.socket.emit(event);
@@ -161,6 +187,10 @@ class SocketService {
       // The server does not push debug mode on connect, and it is server-global,
       // so a recording may already be running. Read-only, like the above.
       socket.emit('get_debug_status');
+      // The roster is not part of session_state, so it is asked for
+      // separately — and on every reconnect, since it may have changed on
+      // another client while this phone was away.
+      socket.emit('get_profiles');
     });
 
     socket.on('disconnect', () => {
@@ -224,6 +254,15 @@ class SocketService {
 
     socket.on('debug_toggled', (data: DebugToggledPayload) => {
       useDeviceStore.getState().applyDebugStatus(data);
+    });
+
+    // The server's authoritative roster, broadcast after every mutation — and
+    // after one it refuses, which is how a client that asked for something
+    // invalid (removing the active profile, the last profile, or one with
+    // shots) discovers nothing changed. Applying it verbatim is the whole
+    // reconciliation strategy; there is no local copy to merge.
+    socket.on('profiles', (data: ProfilesSnapshot) => {
+      useProfileStore.getState().applySnapshot(data);
     });
   }
 }
