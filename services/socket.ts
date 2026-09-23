@@ -1,8 +1,18 @@
 import { io, type Socket } from 'socket.io-client';
+import { useDeviceStore } from '../stores/useDeviceStore';
 import { useSessionStore } from '../stores/useSessionStore';
 import { saveServerUrl } from '../storage/connection';
 import { getShotRepository } from '../storage/db';
-import type { ClubChangedPayload, SessionStatePayload, Shot, ShotEnvelope } from '../types';
+import type {
+  ClubChangedPayload,
+  DebugStatusPayload,
+  DebugToggledPayload,
+  PowerStatusPayload,
+  SessionStatePayload,
+  Shot,
+  ShotEnvelope,
+  TriggerStatusPayload,
+} from '../types';
 
 // Singleton Socket.IO client, mirroring the web app's socketService shape: one
 // place that maps every server event onto a store mutation. Kept out of the
@@ -41,9 +51,12 @@ class SocketService {
       this.socket = null;
     }
 
-    // The selected club belongs to the server that reported it; a different
-    // server restores its own through session_state once connected.
+    // Device status and the selected club both describe the server that
+    // reported them. Switching servers must not leave another Pi's radar port,
+    // battery or club on screen; the new one restores its own club through
+    // session_state once connected.
     if (this.url !== null && this.url !== url) {
+      useDeviceStore.getState().reset();
       store.setClub(null);
     }
 
@@ -65,9 +78,21 @@ class SocketService {
     this.socket = null;
     this.url = null;
     useSessionStore.getState().setConnectionState('disconnected');
-    // Only the deliberate disconnect forgets the club; a transient drop keeps
-    // showing it, since reconnecting restores the same server's selection.
+    // Only the deliberate disconnect forgets the device and the club. A
+    // transient drop is handled by the 'disconnect' event below, which leaves
+    // both in place: blanking the radar and battery every time the wifi
+    // hiccups would read as hardware failing rather than a wobbly link, and
+    // reconnecting restores the same server's club.
+    useDeviceStore.getState().reset();
     useSessionStore.getState().setClub(null);
+  }
+
+  // The address the current socket was opened against, or null after a
+  // deliberate disconnect. Anything addressed to "this Pi" outside the socket
+  // must use this rather than the saved URL, which is written asynchronously,
+  // may fail to save, and can still name the previous server after a switch.
+  currentUrl(): string | null {
+    return this.url;
   }
 
   simulateShot(): void {
@@ -81,12 +106,22 @@ class SocketService {
     this.emitWhileConnected('set_club', { club });
   }
 
+  // Fire-and-forget: the server flips debug mode and broadcasts the result as
+  // `debug_toggled` to every client, so there is nothing to update
+  // optimistically and nothing to roll back.
+  toggleDebug(): void {
+    this.emitWhileConnected('toggle_debug');
+  }
+
   // Socket.IO keeps the socket through a transient drop and buffers anything
-  // emitted meanwhile, replaying it on reconnect. A selection made before the
-  // drop could then land after the user moved on and decide how the next
-  // shots are filed, so a selection is sent only over a live connection.
-  private emitWhileConnected(event: string, payload: object): void {
-    if (this.socket?.connected) this.socket.emit(event, payload);
+  // emitted meanwhile, replaying it on reconnect. A change made before the drop
+  // could then land after the user moved on -- filing later shots under a club
+  // picked earlier, or flipping recording behind the user's back -- so a change
+  // is sent only over a live connection.
+  private emitWhileConnected(event: string, payload?: object): void {
+    if (!this.socket?.connected) return;
+    if (payload === undefined) this.socket.emit(event);
+    else this.socket.emit(event, payload);
   }
 
   // Files one shot under the current visit. Callers fire and forget, so this
@@ -118,6 +153,14 @@ class SocketService {
       void saveServerUrl(url);
       // Re-sync the full session on every (re)connect, not just the first.
       socket.emit('get_session');
+      // The server pushes trigger status on connect too, but a phone joining a
+      // session that is already running cannot rely on having seen that push --
+      // and the hardware may have changed while it was away. Read-only, so it
+      // needs no connected-only guard: a replayed request costs a snapshot.
+      socket.emit('get_trigger_status');
+      // The server does not push debug mode on connect, and it is server-global,
+      // so a recording may already be running. Read-only, like the above.
+      socket.emit('get_debug_status');
     });
 
     socket.on('disconnect', () => {
@@ -158,6 +201,29 @@ class SocketService {
     socket.on('shot_update', (data: ShotEnvelope) => {
       store().replaceShot(data.shot);
       void this.persistShot(data.shot);
+    });
+
+    // Device health. Both arrive unprompted on connect and again whenever they
+    // change -- trigger status also after every shot -- and each payload is a
+    // complete snapshot, so the store applies it verbatim. The store guards a
+    // malformed payload rather than blanking the panel mid-session.
+    socket.on('trigger_status', (data: TriggerStatusPayload) => {
+      useDeviceStore.getState().applyTriggerStatus(data);
+    });
+
+    socket.on('power_status', (data: PowerStatusPayload) => {
+      useDeviceStore.getState().applyPowerStatus(data);
+    });
+
+    // Debug recording. The server answers a query with `debug_status` and a
+    // toggle with `debug_toggled` -- same meaning, and the latter omits
+    // log_path when switching off, which the store reads as "no log".
+    socket.on('debug_status', (data: DebugStatusPayload) => {
+      useDeviceStore.getState().applyDebugStatus(data);
+    });
+
+    socket.on('debug_toggled', (data: DebugToggledPayload) => {
+      useDeviceStore.getState().applyDebugStatus(data);
     });
   }
 }

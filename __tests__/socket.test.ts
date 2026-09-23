@@ -1,4 +1,5 @@
 import { socketService } from '../services/socket';
+import { useDeviceStore } from '../stores/useDeviceStore';
 import { useSessionStore } from '../stores/useSessionStore';
 import type { Shot } from '../types';
 
@@ -109,6 +110,7 @@ beforeEach(() => {
     shots: [],
     club: null,
   });
+  useDeviceStore.getState().reset();
   for (const key of Object.keys(mockHandlers)) delete mockHandlers[key];
   mockStatus.connected = false;
   mockIo.mockClear();
@@ -354,6 +356,228 @@ describe('a shot the server enriches after publishing it', () => {
     await flushPendingWrites();
 
     expect(useSessionStore.getState().shots[0].spin_rpm).toBe(2680);
+  });
+});
+
+// On a headless Pi this panel is the only window onto the radar and the
+// battery, so what it shows has to follow the connection honestly: present
+// while a server is answering, gone once it is not.
+describe('device status', () => {
+  const triggerStatus = {
+    mode: 'rolling-buffer',
+    trigger_type: 'audio',
+    radar_connected: true,
+    radar_port: '/dev/ttyUSB0',
+    triggers_total: 12,
+    triggers_accepted: 9,
+    triggers_rejected: 3,
+  };
+
+  const powerStatus = {
+    available: true,
+    provider: 'geekworm',
+    state: 'on_battery',
+    battery_percent: 78,
+    battery_voltage_v: 3.91,
+    external_power: false,
+    updated_at: '2026-09-22T05:30:00Z',
+    error: null,
+  };
+
+  it('asks for the trigger status once connected', () => {
+    // The server pushes it on connect, but a phone joining an already-running
+    // session cannot rely on having seen that push, so it asks as well.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    expect(mockEmit).toHaveBeenCalledWith('get_trigger_status');
+  });
+
+  it('asks again after reconnecting, since the hardware may have changed', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    mockEmit.mockClear();
+
+    trigger('disconnect');
+    trigger('connect');
+
+    expect(mockEmit).toHaveBeenCalledWith('get_trigger_status');
+  });
+
+  it('shows the trigger status the server reports', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('trigger_status', triggerStatus);
+
+    expect(useDeviceStore.getState().triggerStatus?.radar_port).toBe('/dev/ttyUSB0');
+    expect(useDeviceStore.getState().triggerLoaded).toBe(true);
+  });
+
+  it('shows the power status the server reports', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('power_status', powerStatus);
+
+    expect(useDeviceStore.getState().powerStatus?.battery_percent).toBe(78);
+    expect(useDeviceStore.getState().powerLoaded).toBe(true);
+  });
+
+  it('ignores a malformed status rather than blanking the panel', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('trigger_status', triggerStatus);
+    trigger('power_status', powerStatus);
+
+    trigger('trigger_status', null);
+    trigger('power_status', undefined);
+
+    expect(useDeviceStore.getState().triggerStatus?.mode).toBe('rolling-buffer');
+    expect(useDeviceStore.getState().powerStatus?.provider).toBe('geekworm');
+  });
+
+  it('keeps the last reading through a transient drop', () => {
+    // Socket.IO reconnects on its own. Blanking the radar and battery every
+    // time the wifi hiccups would read as hardware failing, not a wobbly link.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('trigger_status', triggerStatus);
+    trigger('power_status', powerStatus);
+
+    trigger('disconnect');
+
+    expect(useDeviceStore.getState().triggerStatus).not.toBeNull();
+    expect(useDeviceStore.getState().powerStatus).not.toBeNull();
+  });
+
+  it('forgets the device when the user disconnects deliberately', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('trigger_status', triggerStatus);
+    trigger('power_status', powerStatus);
+    // The panel has to be showing something first, or "it is empty afterwards"
+    // is true of a store nothing ever filled and proves nothing.
+    expect(useDeviceStore.getState().triggerStatus).not.toBeNull();
+    expect(useDeviceStore.getState().powerStatus).not.toBeNull();
+
+    socketService.disconnect();
+
+    const state = useDeviceStore.getState();
+    expect(state.triggerStatus).toBeNull();
+    expect(state.powerStatus).toBeNull();
+    expect(state.triggerLoaded).toBe(false);
+    expect(state.powerLoaded).toBe(false);
+  });
+
+  it('asks for the debug state once connected', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    expect(mockEmit).toHaveBeenCalledWith('get_debug_status');
+  });
+
+  it('shows the debug recording state the server reports', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('debug_status', { enabled: true, log_path: '/home/pi/debug.jsonl' });
+
+    expect(useDeviceStore.getState().debugEnabled).toBe(true);
+    expect(useDeviceStore.getState().debugLogPath).toBe('/home/pi/debug.jsonl');
+  });
+
+  it('follows a debug toggle made on another client', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+
+    trigger('debug_toggled', { enabled: true, log_path: '/home/pi/debug.jsonl' });
+
+    expect(useDeviceStore.getState().debugEnabled).toBe(true);
+  });
+
+  it('asks the server to toggle debug recording while connected', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    mockEmit.mockClear();
+
+    socketService.toggleDebug();
+
+    expect(mockEmit).toHaveBeenCalledWith('toggle_debug');
+  });
+
+  it('sends no toggle during a transient drop, even once reconnected', () => {
+    // Socket.IO buffers anything emitted through a drop and replays it on
+    // reconnect, so a toggle tapped while the wifi was away would land later
+    // and flip recording behind the user's back.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('disconnect');
+    mockEmit.mockClear();
+
+    socketService.toggleDebug();
+    trigger('connect');
+
+    expect(mockEmit).not.toHaveBeenCalledWith('toggle_debug');
+  });
+
+  it('forgets the debug state on a deliberate disconnect', () => {
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('debug_status', { enabled: true, log_path: '/home/pi/debug.jsonl' });
+    expect(useDeviceStore.getState().debugEnabled).toBe(true);
+
+    socketService.disconnect();
+
+    expect(useDeviceStore.getState().debugEnabled).toBe(false);
+    expect(useDeviceStore.getState().debugLogPath).toBeNull();
+  });
+
+  it('forgets the device when switching to a different server', () => {
+    // Another Pi's radar port and battery must not be read as this one's.
+    socketService.connect('http://host:8080');
+    trigger('connect');
+    trigger('trigger_status', triggerStatus);
+    trigger('power_status', powerStatus);
+    expect(useDeviceStore.getState().triggerStatus).not.toBeNull();
+    expect(useDeviceStore.getState().powerStatus).not.toBeNull();
+
+    socketService.connect('http://other:8080');
+
+    expect(useDeviceStore.getState().triggerStatus).toBeNull();
+    expect(useDeviceStore.getState().powerStatus).toBeNull();
+  });
+});
+
+describe('the active server address', () => {
+  it('names the server most recently connected to, not an earlier one', () => {
+    // Stopping OpenFlight is addressed over HTTP, outside the socket, so it
+    // needs the address this socket is actually talking to.
+    socketService.connect('http://pi-a:8080');
+    trigger('connect');
+
+    socketService.connect('http://pi-b:8080');
+    trigger('connect');
+
+    expect(socketService.currentUrl()).toBe('http://pi-b:8080');
+  });
+
+  it('keeps the address through a transient drop', () => {
+    socketService.connect('http://pi-a:8080');
+    trigger('connect');
+
+    trigger('disconnect');
+
+    expect(socketService.currentUrl()).toBe('http://pi-a:8080');
+  });
+
+  it('has no address after a deliberate disconnect', () => {
+    socketService.connect('http://pi-a:8080');
+    trigger('connect');
+
+    socketService.disconnect();
+
+    expect(socketService.currentUrl()).toBeNull();
   });
 });
 
