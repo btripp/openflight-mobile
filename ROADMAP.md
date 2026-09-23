@@ -46,8 +46,8 @@ Delivered by #1, with connection recovery in #13 and the Expo SDK 54 → 57 upgr
 | Navigation shell | ✅ #1 | Bottom tabs via expo-router (Live / Shots / Stats / Device). `app/` |
 | Socket service | ✅ #1 | Singleton mirroring the web UI's `src/services/socketService.ts` — one place mapping every server event → store. `services/socket.ts` |
 | State store | ✅ #1 | zustand stores shared across tabs. `stores/` |
-| Connection persistence | ✅ #1, #13 | Server URL persisted via AsyncStorage; Socket.IO's own backoff handles reconnects. A failed or mistyped address is recoverable (#13). Auto-discovery is Phase 2 item 3. |
-| Wire-contract expansion | ✅ #1, then per feature | `types.ts` covers `session_state` extras, `shot_processing`, `club_changed`, `profiles`, `trigger_status`, `power_status`, `radar_config`. Types land with the feature that consumes them, per `AGENTS.md`'s no-speculative-payloads rule — so a declared type does not by itself mean the feature ships. |
+| Connection persistence | ✅ #1, #13 | Server URL persisted via AsyncStorage; Socket.IO's own backoff handles reconnects. A failed or mistyped address is recoverable (#13). The default is still `192.168.1.100:8080`; switching it to the AP address `192.168.4.1:8080` waits on Phase 3. Auto-discovery is Phase 2 item 3. |
+| Wire-contract expansion | ✅ #1, then per feature | `types.ts` covers `session_state` extras, `shot_processing`, `club_changed`, `profiles`, `trigger_status`, `power_status`. `radar_config` is not typed yet. Types land with the feature that consumes them, per `AGENTS.md`'s no-speculative-payloads rule — so a declared type does not by itself mean the feature ships. |
 | Test infra | ✅ #1 | `jest-expo` + `@testing-library/react-native`, enforced by CI (#3). |
 
 ---
@@ -60,12 +60,12 @@ Delivered by #1, with connection recovery in #13 and the Expo SDK 54 → 57 upgr
 |---|---|---|---|---|
 | 1 | Shot history list | ✅ #16, #17 | — | Shots tab, kept on the device in SQLite. Swing-speed sessions fixed in #17. |
 | 1b | Delete a shot | ⬜ | `delete_shot` → `session_state`, or `delete_shot_error` | Not started; `delete_shot` is emitted nowhere. Behind a confirm. Note the server answers a miss with `delete_shot_error`, not `session_cleared`. |
-| 2 | Session stats | ✅ #20 | `session_state.stats` | Stats tab uses the kiosk's own aggregates rather than a local reimplementation. |
+| 2 | Session stats | 🟡 #16, #20 | — (computed on the device) | The Shots tab shows the summary tiles. `utils/sessionStats.ts` computes them from the local shot list using a hand-mirrored port of the kiosk's `computeStats` (#20). The Stats tab itself is still a placeholder. |
 | 2b | Clear the session | ⬜ | `clear_session` → `session_cleared` | Not started. **Profile-scoped:** the payload is `{profile_id}`, defaulting to the active profile, and `session_cleared` returns `{profile_id, shots}` where `shots` is the whole remaining session. Behind a confirm. |
 | 3 | Club selection | ✅ #19, #25 | `set_club` / `club_changed` | Canonical club list mirrored in #19; the picker in #25 reflects server-pushed changes from any client. |
 | 3b | On-connect club prompt | ⬜ | — | The kiosk's club-select-on-first-connect screen has no mobile equivalent yet. |
 | 4 | Profile selection | 🟡 #21 | `get_profiles`, `set_active_profile`, `add_profile`, `rename_profile`, `remove_profile` → `profiles` | Data layer shipped in #21; the picker UI is still to land. **This replaces what this roadmap previously called "player selection"** — see the contract note below. |
-| 5 | Unit toggle (imperial/metric) | ✅ #18 | client-side, persisted | Ported from the kiosk. |
+| 5 | Unit toggle (imperial/metric) | 🟡 #18 | client-side, persisted | #18 ported only the kiosk's conversion helpers (`utils/units.ts`), and nothing imports them yet. `CurrentShotView` still hardcodes mph/yds, and there is no toggle or persisted preference. |
 | 6 | Live polish | ⬜ | `shot_processing` | `ShotProcessingState` is typed but no handler consumes it. Capturing/calculating states and a shot-arrival flash are still to do. |
 
 ---
@@ -77,7 +77,7 @@ Delivered by #1, with connection recovery in #13 and the Expo SDK 54 → 57 upgr
 | # | Feature | Status | Mechanism | Notes |
 |---|---|---|---|---|
 | 1 | Stop the server gracefully | ✅ #26 | `POST /api/shutdown` | Confirm → pending/success/error. **Corrected:** this stops the OpenFlight **server process** (`_shutdown_process_after_delay` calls `os._exit(0)`). It does **not** power the Pi down, and neither `server.py` nor `start-kiosk.sh` has a poweroff path. Earlier revisions of this roadmap described it as preventing a power-yank on a live Pi, which invites the opposite reading; the UI is worded as stopping OpenFlight for that reason. |
-| 2 | Device/Status view | ✅ #26 | `trigger_status`, `power_status`, `toggle_debug` / `debug_toggled` | Device tab: radar/trigger health, battery when a provider is present, and debug recording. `radar_config` is typed but not yet displayed. |
+| 2 | Device/Status view | ✅ #26 | `trigger_status`, `power_status`, `get_debug_status` / `debug_status`, `toggle_debug` / `debug_toggled` | Device tab: radar/trigger health, battery when a provider is present, and debug recording. The read-only `radar_config` view has not been started: nothing sends `get_radar_config`, and there is no type for it. |
 | 3 | Connection bootstrapping | ⬜ | mDNS discovery and/or AP default | Not started — no discovery code or dependency is present. "Just tap Connect" without reading an IP off a screen you removed. |
 
 **Test story:** shutdown state machine (confirm→pending→success/error) as a component
