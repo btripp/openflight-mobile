@@ -47,7 +47,7 @@ Delivered by #1, with connection recovery in #13 and the Expo SDK 54 → 57 upgr
 | Socket service | ✅ #1 | Singleton mirroring the web UI's `src/services/socketService.ts` — one place mapping every server event → store. `services/socket.ts` |
 | State store | ✅ #1 | zustand stores shared across tabs. `stores/` |
 | Connection persistence | ✅ #1, #13 | Server URL persisted via AsyncStorage; Socket.IO's own backoff handles reconnects. A failed or mistyped address is recoverable (#13). The default is still `192.168.1.100:8080`; switching it to the AP address `192.168.4.1:8080` waits on Phase 3. Auto-discovery is Phase 2 item 3. |
-| Wire-contract expansion | ✅ #1, then per feature | `types.ts` covers `session_state` extras, `shot_processing`, `club_changed`, `profiles`, `trigger_status`, `power_status`. `radar_config` is not typed yet. Types land with the feature that consumes them, per `AGENTS.md`'s no-speculative-payloads rule — so a declared type does not by itself mean the feature ships. |
+| Wire-contract expansion | ✅ #1, then per feature | `types.ts` covers `session_state` extras, `shot_processing`, `club_changed`, `profiles`, `trigger_status`, `power_status`, `debug_status`, `debug_toggled`. `radar_config` is not typed yet. Types land with the feature that consumes them, per `AGENTS.md`'s no-speculative-payloads rule — so a declared type does not by itself mean the feature ships. |
 | Test infra | ✅ #1 | `jest-expo` + `@testing-library/react-native`, enforced by CI (#3). |
 
 ---
@@ -60,12 +60,12 @@ Delivered by #1, with connection recovery in #13 and the Expo SDK 54 → 57 upgr
 |---|---|---|---|---|
 | 1 | Shot history list | ✅ #16, #17 | — | Shots tab, kept on the device in SQLite. Swing-speed sessions fixed in #17. |
 | 1b | Delete a shot | ⬜ | `delete_shot` → `session_state`, or `delete_shot_error` | Not started; `delete_shot` is emitted nowhere. Behind a confirm. Note the server answers a miss with `delete_shot_error`, not `session_cleared`. |
-| 2 | Session stats | 🟡 #16, #20 | — (computed on the device) | The Shots tab shows the summary tiles. `utils/sessionStats.ts` computes them from the local shot list using a hand-mirrored port of the kiosk's `computeStats` (#20). The Stats tab itself is still a placeholder. |
+| 2 | Session stats | 🟡 #16, #20 | — (computed on the device) | The Shots tab shows the summary tiles. `utils/sessionStats.ts` computes them from the local shot list using a hand-mirrored port of the kiosk's `computeStats` (#20) — `session_state` carries no `stats` field to read instead. The Stats tab itself is still a placeholder; a real one is the remaining work. |
 | 2b | Clear the session | ⬜ | `clear_session` → `session_cleared` | Not started. **Profile-scoped:** the payload is `{profile_id}`, defaulting to the active profile, and `session_cleared` returns `{profile_id, shots}` where `shots` is the whole remaining session. Behind a confirm. |
 | 3 | Club selection | ✅ #19, #25 | `set_club` / `club_changed` | Canonical club list mirrored in #19; the picker in #25 reflects server-pushed changes from any client. |
 | 3b | On-connect club prompt | ⬜ | — | The kiosk's club-select-on-first-connect screen has no mobile equivalent yet. |
 | 4 | Profile selection | 🟡 #21 | `get_profiles`, `set_active_profile`, `add_profile`, `rename_profile`, `remove_profile` → `profiles` | Data layer shipped in #21; the picker UI is still to land. **This replaces what this roadmap previously called "player selection"** — see the contract note below. |
-| 5 | Unit toggle (imperial/metric) | 🟡 #18 | client-side, persisted | #18 ported only the kiosk's conversion helpers (`utils/units.ts`), and nothing imports them yet. `CurrentShotView` still hardcodes mph/yds, and there is no toggle or persisted preference. |
+| 5 | Unit toggle (imperial/metric) | 🟡 #18 | client-side | #18 ported only the kiosk's conversion helpers (`utils/units.ts`), and nothing imports them yet. `CurrentShotView` and the Shots list still hardcode mph/yds, and there is no toggle or persisted preference. Remaining: a control, persistence, and routing the displays through the helpers. |
 | 6 | Live polish | ⬜ | `shot_processing` | `ShotProcessingState` is typed but no handler consumes it. Capturing/calculating states and a shot-arrival flash are still to do. |
 
 ---
@@ -125,14 +125,26 @@ Phase 0 gates everything and is complete. Phases 1 and 2 are each internally inc
 
 Checked against `src/openflight/server.py` and `src/openflight/profiles.py`.
 
-Client → server emits used by this roadmap: `get_session`, `set_club`, `simulate_shot`,
-`delete_shot`, `clear_session`, `get_profiles`, `set_active_profile`, `add_profile`,
-`rename_profile`, `remove_profile`, `get_trigger_status`, `get_radar_config`,
-`toggle_debug`; plus `POST /api/shutdown`.
+Shipped and planned are listed separately. A name under "planned" exists on the server but
+has no caller or handler in this app yet, so it states an intention, not the current wiring.
 
-Server → client events consumed: `session_state`, `shot`, `shot_update`,
-`shot_processing`, `session_cleared`, `club_changed`, `profiles`, `trigger_status`,
-`radar_config`, `power_status`, `debug_toggled`, `delete_shot_error`.
+**Client → server, shipped** — all in `services/socket.ts`: `get_session`,
+`get_trigger_status`, `get_debug_status` and `get_profiles` on connect; `simulate_shot`,
+`set_club`, `toggle_debug`, `set_active_profile`, `add_profile`, `rename_profile` and
+`remove_profile` on user action. Plus `POST /api/shutdown`, which is HTTP rather than
+socket traffic.
+
+**Client → server, planned:** `delete_shot` (item 1b), `clear_session` (item 2b).
+
+**Server → client, handlers registered:** `session_state`, `shot`, `shot_update`,
+`club_changed`, `profiles`, `trigger_status`, `power_status`, `debug_status` and
+`debug_toggled` — plus the transport's own `connect` / `disconnect` / `connect_error`.
+
+**Server → client, no handler yet:** `shot_processing` (item 6), `session_cleared`
+(item 2b), `delete_shot_error` (item 1b).
+
+`get_radar_config` / `radar_config` are in neither list. Radar-config editing is an explicit
+non-goal above, and nothing in the app emits, types or consumes either name.
 
 ### Profiles replaced players
 
@@ -152,7 +164,16 @@ Behaviour worth knowing before building against it:
   session rows.
 - The roster is never empty and `active_profile_id` is never empty: the server seeds a
   profile when its file holds none. There is no empty-roster state to design for.
-- `MAX_PROFILES` (12) and `MAX_NAME_LENGTH` (40) are enforced server-side but never sent
-  on the wire, so a client has to know them or the user hits a silent no-op.
+- `MAX_PROFILES` (12) and `MAX_NAME_LENGTH` (40) are both enforced server-side and neither
+  is sent on the wire, so a client has to know them. They do **not** fail the same way:
+  - **At 12 profiles the add is rejected** — `ProfileStore.add()` returns `None` and no
+    profile is created. With only a snapshot in reply, that reads as a silent no-op, so a
+    client should disable the control at 12 rather than let the request disappear.
+  - **An overlength name is accepted and silently truncated** to its first 40 characters by
+    `clean_profile_name`, for `add_profile` and `rename_profile` alike. The mutation
+    succeeds; the profile simply comes back renamed. Cap the input at 40 so the server does
+    not quietly rewrite what the user typed.
+  - A name that is empty or whitespace-only is rejected outright by both calls — a third
+    outcome, and again answered with an unchanged snapshot.
 - Names are neither unique nor a key — `id` is. A rename preserves the id, which is why
   `shot.profile_name` is a capture-time snapshot and goes stale.
